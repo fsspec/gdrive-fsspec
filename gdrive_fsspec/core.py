@@ -1,16 +1,17 @@
 from functools import cached_property
-import re
 import json
+import logging
 import os
+import re
 
 from fsspec.spec import AbstractFileSystem, AbstractBufferedFile
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google.auth.credentials import AnonymousCredentials
 from google.oauth2 import service_account
-import pydata_google_auth
 
 
+logger = logging.getLogger("gdrive_fsspec")
 scope_dict = {
     "full_control": "https://www.googleapis.com/auth/drive",
     "read_only": "https://www.googleapis.com/auth/drive.readonly",
@@ -22,13 +23,11 @@ fields = ",".join(
         "name",
         "id",
         "size",
-        "description",
         "trashed",
         "mimeType",
         "version",
         "createdTime",
         "modifiedTime",
-        "capabilities",
     ]
 )
 
@@ -63,10 +62,11 @@ class GoogleDriveFileSystem(AbstractFileSystem):
         access="full_control",
         spaces="drive",
         creds=None,
+        drive=None,
         **kwargs,
     ):
         """
-        Access to doogle-grive as a file-system
+        Access to google-drive as a file-system
 
         :param root_file_id: str or None
             If you have a share, drive or folder ID to treat as the FS root, enter
@@ -74,7 +74,7 @@ class GoogleDriveFileSystem(AbstractFileSystem):
         :param token: str
             One of "anon", "browser", "cache", "service_account". Using "browser" will prompt a URL to
             be put in a browser, and cache the response for future use with token="cache".
-            "browser" will remove any previously cached token file if it exists.
+            "browser" will remove any previously cached token file, if it exists.
         :param access: str
             One of "full_control", "read_only"
         :param spaces:
@@ -82,23 +82,24 @@ class GoogleDriveFileSystem(AbstractFileSystem):
             Of these, only the first is general
         :param creds: None or dict
             Required just for "service_account" token, a dict containing the service account
-            credentials obtainend in GCP console. The dict content is the same as the json file
+            credentials obtained in GCP console. The dict content is the same as the json file
             downloaded from GCP console. More details can be found here:
             https://cloud.google.com/iam/docs/service-account-creds#key-types
-            This credential can be usful when integrating with other GCP services, and when you
+            This credential can be useful when integrating with other GCP services, and when you
             don't want the user to be prompted to authenticate.
             The files need to be shared with the service account email address, that can be found
             in the json file.
         :param kwargs:
             Passed to parent
         """
-        super().__init__(**kwargs)
+        super().__init__(use_listings_cache=False, **kwargs)
         self.access = access
         self.scopes = [scope_dict[access]]
         self.spaces = spaces
-        self.root_file_id = root_file_id or "root"
         self.creds = creds
         self.connect(method=token)
+        self.drive = self._drive_id_from_name(drive) if drive else drive
+        self.root_file_id = root_file_id or self.drive or "root"
 
     def connect(self, method=None):
         if method == "browser":
@@ -117,6 +118,8 @@ class GoogleDriveFileSystem(AbstractFileSystem):
 
     @property
     def _user_credentials_cache_path(self):
+        import pydata_google_auth
+
         return pydata_google_auth.cache.READ_WRITE._path
 
     def _connect_browser(self):
@@ -127,13 +130,19 @@ class GoogleDriveFileSystem(AbstractFileSystem):
         return self._connect_cache()
 
     def _connect_cache(self):
+        import pydata_google_auth
+
         return pydata_google_auth.get_user_credentials(
             self.scopes, use_local_webserver=True
         )
 
     def _connect_service_account(self):
+        if isinstance(self.creds, str):
+            creds = json.load(open(self.creds))
+        else:
+            creds = self.creds
         return service_account.Credentials.from_service_account_info(
-            info=self.creds, scopes=self.scopes
+            info=creds, scopes=self.scopes
         )
 
     @cached_property
@@ -158,25 +167,29 @@ class GoogleDriveFileSystem(AbstractFileSystem):
             "mimeType": DIR_MIME_TYPE,
             "parents": [parent_id],
         }
-        self.files.create(body=meta).execute()
+        if self.exists(path):
+            raise FileExistsError(path)
+        logger.debug(f"Creating {path}, child of {parent_id}")
+        self.files.create(body=meta, supportsAllDrives=True).execute()
         self.invalidate_cache(self._parent(path))
 
     def makedirs(self, path, exist_ok=True):
-        if self.isdir(path):
-            if exist_ok:
-                return
-            else:
+        parts = path.split("/")
+        path = ""
+        for i, part in enumerate(parts):
+            path = path + "/" + part if path else part
+            if not self.exists(path):
+                self.mkdir(path, create_parents=False)
+            elif i == len(parts) - 1 and not exist_ok:
                 raise FileExistsError(path)
-        if self._parent(path):
-            self.makedirs(self._parent(path), exist_ok=True)
-        self.mkdir(path, create_parents=False)
 
     def _delete(self, file_id):
-        self.files.delete(fileId=file_id).execute()
+        self.files.delete(fileId=file_id, supportsAllDrives=True).execute()
 
     def rm(self, path, recursive=True, maxdepth=None):
         if recursive is False and self.isdir(path) and self.ls(path):
             raise ValueError("Attempt to delete non-empty folder")
+        logger.debug(f"Removing {path}")
         self._delete(self.path_to_file_id(path))
         self.invalidate_cache(path)
         self.invalidate_cache(self._parent(path))
@@ -188,8 +201,7 @@ class GoogleDriveFileSystem(AbstractFileSystem):
 
     def _info_by_id(self, file_id, path_prefix=None):
         response = self.files.get(
-            fileId=file_id,
-            fields=fields,
+            fileId=file_id, fields=fields, supportsAllDrives=True
         ).execute()
         return _finfo_from_response(response, path_prefix)
 
@@ -199,46 +211,33 @@ class GoogleDriveFileSystem(AbstractFileSystem):
         mime_type is something like "text/plain"
         """
         file_id = self.path_to_file_id(path)
-        return self.files.export(fileId=file_id, mimeType=mime_type).execute()
+        return self.files.export(
+            fileId=file_id, mimeType=mime_type, supportsAllDrives=True
+        ).execute()
 
-    def split_drive(self, path):
-        root, *_ = path.rsplit("/", 1)
-        if ":" in root:
-            drive, rest = path.split(":", 1)
-        else:
-            return None, path
-        if len(drive) == 19 and drive[0] == "0":
-            # + other conditions, seems to be "^0[a-zA-Z0-9_-]{18}$"
-            return drive, rest
-        drive = [_["id"] for _ in self.drives if _["name"] == drive]
+    def _drive_id_from_name(self, name):
+        drive = [_["id"] for _ in self.drives if _["name"] == name]
         if len(drive) == 0:
             raise ValueError(f"Drive name {drive} not found")
         elif len(drive) == 1:
-            return drive[0], rest
+            return drive[0]
         else:
             raise ValueError(f"Drive name {drive} refers to multiple shared drives")
 
     def ls(self, path, detail=False, trashed=False):
         path = self._strip_protocol(path)
-        if path in [None, "/"]:
-            path0 = ""
-        else:
-            path0 = path
+        path0 = "" if path in [None, "/"] else path
         files = self._ls_from_cache(path0)
-        drive, path = self.split_drive(path0)
 
         if not files:
-            if path == "":
-                file_id = self.root_file_id
-            else:
-                file_id = self.path_to_file_id(path, trashed=trashed, drive=drive)
+            file_id = self.path_to_file_id(path, trashed=trashed)
             files = self._list_directory_by_id(
-                file_id, trashed=trashed, path_prefix=path, drive=drive
+                file_id, trashed=trashed, path_prefix=path
             )
             if files:
                 self.dircache[path0] = files
             else:
-                file_id = self.path_to_file_id(path0, trashed=trashed, drive=drive)
+                file_id = self.path_to_file_id(path0, trashed=trashed)
                 files = [self._info_by_id(file_id)]
 
         if detail:
@@ -246,37 +245,37 @@ class GoogleDriveFileSystem(AbstractFileSystem):
         else:
             return sorted([f["name"] for f in files])
 
-    @staticmethod
-    def _drive_kw(drive=None):
-        if drive is not None:
+    def _drive_kw(self):
+        if self.drive is not None:
             return dict(
                 includeItemsFromAllDrives=True,
                 corpora="drive",
                 supportsAllDrives=True,
-                driveId=drive,
+                driveId=self.drive,
             )
         else:
             return {}
 
-    def _list_directory_by_id(
-        self, file_id, trashed=False, path_prefix=None, drive=None
-    ):
+    def _list_directory_by_id(self, file_id, trashed=False, path_prefix=None):
         all_files = []
         page_token = None
         afields = "nextPageToken, files(%s)" % fields
-        if file_id == "root" and drive is not None:
-            query = f"'{drive}' in parents "
+        if file_id == "root" and self.drive is not None:
+            query = f"'{self.drive}' in parents "
         else:
             query = f"'{file_id}' in parents "
         if not trashed:
             query += "and trashed = false "
-        kwargs = self._drive_kw(drive)
+        kwargs = self._drive_kw()
         while True:
+            logger.debug(query)
             response = self.files.list(
                 q=query,
                 spaces=self.spaces,
                 fields=afields,
                 pageToken=page_token,
+                orderBy="name",
+                pageSize=1000,
                 **kwargs,
             ).execute()
             for f in response.get("files", []):
@@ -286,29 +285,25 @@ class GoogleDriveFileSystem(AbstractFileSystem):
                 break
         return all_files
 
-    def path_to_file_id(self, path, parent=None, trashed=False, drive=None):
+    def path_to_file_id(self, path, parent=None, trashed=False):
         items = path.strip("/").split("/")
         if path in ["", "/", "root", self.root_file_id]:
             return self.root_file_id
         if parent is None:
             parent = self.root_file_id
         top_file_id = self._get_directory_child_by_name(
-            items[0], parent, trashed=trashed, drive=drive
+            items[0], parent, trashed=trashed
         )
         if len(items) == 1:
             return top_file_id
         else:
             sub_path = "/".join(items[1:])
-            return self.path_to_file_id(
-                sub_path, parent=top_file_id, trashed=trashed, drive=drive
-            )
+            return self.path_to_file_id(sub_path, parent=top_file_id, trashed=trashed)
 
     def _get_directory_child_by_name(
-        self, child_name, directory_file_id, trashed=False, drive=None
+        self, child_name, directory_file_id, trashed=False
     ):
-        all_children = self._list_directory_by_id(
-            directory_file_id, trashed=trashed, drive=drive
-        )
+        all_children = self._list_directory_by_id(directory_file_id, trashed=trashed)
         possible_children = []
         for child in all_children:
             if child["name"] == child_name:
@@ -370,7 +365,9 @@ class GoogleDriveFile(AbstractBufferedFile):
         """
 
         if self._media_object is None:
-            self._media_object = self.fs.files.get_media(fileId=self.file_id)
+            self._media_object = self.fs.files.get_media(
+                fileId=self.file_id, supportsAllDrives=True
+            )
         if start is not None or end is not None:
             start = start or 0
             end = end or 0
@@ -415,7 +412,12 @@ class GoogleDriveFile(AbstractBufferedFile):
             {"Content-Type": "application/octet-stream", "Content-Length": str(length)}
         )
         req = self.fs.files._http.request
-        head, body = req(self.location, method="PUT", body=data, headers=head)
+        head, body = req(
+            self.location + "&supportsAllDrives=true",
+            method="PUT",
+            body=data,
+            headers=head,
+        )
         status = int(head["status"])
         assert status < 400, "Init upload failed"
         if status in [200, 201]:
@@ -446,7 +448,7 @@ class GoogleDriveFile(AbstractBufferedFile):
         #   update it by getting the ID and using PATCH, else you get two
         #   identically-named files
         r = req(
-            "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable",
+            "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true",
             method="POST",
             headers=head,
             body=body,
@@ -458,9 +460,11 @@ class GoogleDriveFile(AbstractBufferedFile):
     def discard(self):
         """Cancel in-progress multi-upload"""
         if self.location is None:
+            logger.debug("Abort file creation %s", self.path)
             return
+        logger.debug("Cancel file creation %s", self.path)
         uid = re.findall("upload_id=([^&=?]+)", self.location)
-        head, _ = self.gcsfs._call(
+        head, _ = self.fs._call(
             "DELETE",
             "https://www.googleapis.com/upload/drive/v3/files",
             params={"uploadType": "resumable", "upload_id": uid},
