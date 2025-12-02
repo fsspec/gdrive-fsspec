@@ -10,7 +10,7 @@ You can install it with pip from pypi or directly from source:
 
 ```sh
 pip install gdrive_fsspec
-pip install git+https://github.com/fsspec/gdrivefs
+pip install git+https://github.com/fsspec/gdrive-fsspec
 ```
 
 ## Usage
@@ -32,7 +32,8 @@ be prompted to authenticate.
 
 ```python
 from gdrive_fsspec import GoogleDriveFileSystem
-fs = GoogleDriveFileSystem(creds=service_account_credentials)
+fs = GoogleDriveFileSystem(creds=service_account_credentials,
+                           token="service_account")
 ```
 
 2. OAuth with user credentials
@@ -58,37 +59,39 @@ token = 'anon'
 fs = GoogleDriveFileSystem(token=token)
 ```
 
-See [GoogleDriveFileSystem](https://github.com/fsspec/gdrivefs/blob/master/gdrivefs/core.py#L41) docstring for more details.
+See ``GoogleDriveFileSystem`` docstring for more details.
 
 ## Development
 
 ### Running tests
 
-#### Unit tests
+The tests require defining the following environment variables:
+- gdrive_fsspec_CREDENTIALS_PATH: location of a credentials.json
+- gdrive_fsspec_CREDENTIALS_TYPE: token type ("service_account" default)
+- gdrive_fsspec_DRIVE: shared drive to use.
+
+As can be seen, the assumption is, that a service account will be operating
+on a shared drive. This requires the account to be have full shared access to
+the drive.
+
+You could use your own personal gdrive too, either by creating a credentials
+JSON, or by using type "cache" following successful browser-based auth.
+
+All tests take place in a directory "gdrive_fsspec_testdir".
 
 ```sh
 pip install -e . pytest
 pytest -v
 ```
 
-#### Integration tests
+### Style
 
-To run integration tests, you need to have user credentials cached locally that can be used to
-interact with your real Google Drive account. You can do this by running the following:
-
-```py
-import gdrive_fsspec
-fs = gdrive_fsspec.GoogleDriveFileSystem(token='browser')
+Please run pre-commit before submitting PRs. You can automate this by
+calling
+```bash
+$ pre-commit install
 ```
-
-Alternatively, you can save user credentials in a file and set the environment variable
-`GDRIVEFS_USER_CREDENTIALS_PATH` to the path of the file.
-
-Then you can run the integration tests:
-
-```sh
-pytest -v -m integration
-```
+in the repo (once) before committing.
 
 ## Other implementations
 

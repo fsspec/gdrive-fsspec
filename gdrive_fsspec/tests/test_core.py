@@ -1,20 +1,26 @@
 import os
 
-import gdrive_fsspec
 import pytest
 
-testdir = "gdrive_fsspec/testdir"
+import gdrive_fsspec
+
+
+testdir = "gdrive_fsspec_testdir"
+kwargs = {
+    "creds": os.getenv("gdrive_fsspec_CREDENTIALS_PATH"),
+    "token": os.getenv("gdrive_fsspec_CREDENTIALS_TYPE", "service_account"),
+    "drive": os.getenv("gdrive_fsspec_DRIVE"),
+}
 
 
 @pytest.fixture()
-def creds():
-    tfile = os.getenv("gdrive_fsspec_USER_CREDENTIALS_PATH") or None
-    fs = gdrive_fsspec.GoogleDriveFileSystem(token="cache", tokens_file=tfile)
+def fs():
+    fs = gdrive_fsspec.GoogleDriveFileSystem(**kwargs)
     if fs.exists(testdir):
         fs.rm(testdir, recursive=True)
     fs.mkdir(testdir, create_parents=True)
     try:
-        yield tfile
+        yield fs
     finally:
         try:
             fs.rm(testdir, recursive=True)
@@ -27,9 +33,7 @@ def test_create_anon():
     assert fs.srv is not None
 
 
-@pytest.mark.integration
-def test_simple(creds):
-    fs = gdrive_fsspec.GoogleDriveFileSystem(token="cache", tokens_file=creds)
+def test_simple(fs):
     assert fs.ls("")
     data = b"hello"
     fn = testdir + "/testfile"
@@ -38,10 +42,7 @@ def test_simple(creds):
     assert fs.cat(fn) == data
 
 
-@pytest.mark.xfail(reason="Seems to be broken")
-@pytest.mark.integration
-def test_create_directory(creds):
-    fs = gdrive_fsspec.GoogleDriveFileSystem(token="cache", tokens_file=creds)
+def test_create_directory(fs):
     fs.makedirs(testdir + "/data")
     fs.makedirs(testdir + "/data/bar/baz")
 
