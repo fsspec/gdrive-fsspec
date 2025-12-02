@@ -40,18 +40,31 @@ def _normalize_path(prefix, name):
 def _finfo_from_response(f, path_prefix=None):
     # strictly speaking, other types might be capable of having children,
     # such as packages
+    # TODO: check specifically for links
     ftype = "directory" if f.get("mimeType") == DIR_MIME_TYPE else "file"
     if path_prefix:
         name = _normalize_path(path_prefix, f["name"])
     else:
         name = f["name"]
-    f.pop("capabilities", None)  # remove annoying big dict
     info = {"name": name.lstrip("/"), "size": int(f.get("size", 0)), "type": ftype}
     f.update(info)
     return f
 
 
+class MultipleFilesError(FileNotFoundError):
+    pass
+
+
 class GoogleDriveFileSystem(AbstractFileSystem):
+    """
+    Access to google-drive as a file-system
+
+    Limitations:
+    - we assume that each path identifies a unique file. In gdrive, it is
+      possible to have multiple identically named files, and this will
+      result in errors in this implementation.
+    """
+
     protocol = "gdrive"
     root_marker = ""
 
@@ -66,8 +79,6 @@ class GoogleDriveFileSystem(AbstractFileSystem):
         **kwargs,
     ):
         """
-        Access to google-drive as a file-system
-
         :param root_file_id: str or None
             If you have a share, drive or folder ID to treat as the FS root, enter
             it here. Otherwise, you will get your default drive
@@ -92,13 +103,18 @@ class GoogleDriveFileSystem(AbstractFileSystem):
         :param kwargs:
             Passed to parent
         """
-        super().__init__(use_listings_cache=False, **kwargs)
+        super().__init__(**kwargs)
         self.access = access
         self.scopes = [scope_dict[access]]
         self.spaces = spaces
         self.creds = creds
         self.connect(method=token)
-        self.drive = self._drive_id_from_name(drive) if drive else drive
+        if token == "anon":
+            self.drive = None
+        elif drive:
+            self.drive = self._drive_id_from_name(drive)
+        else:
+            self.drive = drive
         self.root_file_id = root_file_id or self.drive or "root"
 
     def connect(self, method=None):
@@ -161,7 +177,8 @@ class GoogleDriveFileSystem(AbstractFileSystem):
     def mkdir(self, path, create_parents=True, **kwargs):
         if create_parents and self._parent(path):
             self.makedirs(self._parent(path), exist_ok=True)
-        parent_id = self.path_to_file_id(self._parent(path))
+        par = self._parent(path)
+        parent_id = self.info(par)["id"]
         meta = {
             "name": path.rstrip("/").rsplit("/", 1)[-1],
             "mimeType": DIR_MIME_TYPE,
@@ -170,8 +187,11 @@ class GoogleDriveFileSystem(AbstractFileSystem):
         if self.exists(path):
             raise FileExistsError(path)
         logger.debug(f"Creating {path}, child of {parent_id}")
-        self.files.create(body=meta, supportsAllDrives=True).execute()
-        self.invalidate_cache(self._parent(path))
+        out = self.files.create(body=meta, supportsAllDrives=True).execute()
+        if par in self.dircache:
+            self.dircache[par].append(_finfo_from_response(out, path_prefix=par))
+        self.dircache[path] = []
+        return out
 
     def makedirs(self, path, exist_ok=True):
         parts = path.split("/")
@@ -183,27 +203,26 @@ class GoogleDriveFileSystem(AbstractFileSystem):
             elif i == len(parts) - 1 and not exist_ok:
                 raise FileExistsError(path)
 
-    def _delete(self, file_id):
+    def rm_file(self, path, file_id=None):
+        file_id = file_id or self.info(path)["id"]
+        logger.debug(f"Removing {path}, file_id={file_id}")
         self.files.delete(fileId=file_id, supportsAllDrives=True).execute()
+        par = self._parent(path)
+        if par in self.dircache:
+            listing = self.dircache[par]
+            i = [i for i, li in enumerate(listing) if li["name"] == path][0]
+            listing.pop(i)
+        self.dircache.pop(path)
 
     def rm(self, path, recursive=True, maxdepth=None):
         if recursive is False and self.isdir(path) and self.ls(path):
             raise ValueError("Attempt to delete non-empty folder")
-        logger.debug(f"Removing {path}")
-        self._delete(self.path_to_file_id(path))
-        self.invalidate_cache(path)
-        self.invalidate_cache(self._parent(path))
+        self.rm_file(path)
 
     def rmdir(self, path):
         if not self.isdir(path):
             raise ValueError("Path is not a directory")
         self.rm(path, recursive=False)
-
-    def _info_by_id(self, file_id, path_prefix=None):
-        response = self.files.get(
-            fileId=file_id, fields=fields, supportsAllDrives=True
-        ).execute()
-        return _finfo_from_response(response, path_prefix)
 
     def export(self, path, mime_type):
         """Convert a google-native file to another format and download
@@ -226,24 +245,56 @@ class GoogleDriveFileSystem(AbstractFileSystem):
 
     def ls(self, path, detail=False, trashed=False):
         path = self._strip_protocol(path)
-        path0 = "" if path in [None, "/"] else path
-        files = self._ls_from_cache(path0)
+        files = self._ls_from_cache(path)
 
-        if not files:
-            file_id = self.path_to_file_id(path, trashed=trashed)
+        if files is None:
+            # get parent ID
+            if "/" in path:
+                pref = path.rsplit("/", 1)[0]
+                inf = self.info(pref, trashed=trashed)
+                file_id = inf["id"]
+            else:
+                pref = ""
+                file_id = self.root_file_id
+
+            # list parent
             files = self._list_directory_by_id(
-                file_id, trashed=trashed, path_prefix=path
+                file_id, trashed=trashed, path_prefix=pref
             )
             if files:
-                self.dircache[path0] = files
+                self.dircache[pref] = files
             else:
-                file_id = self.path_to_file_id(path0, trashed=trashed)
-                files = [self._info_by_id(file_id)]
+                raise FileNotFoundError(path)
+
+            if path:
+                # else we listed the top-level and are done
+                this_file = [f for f in files if f["name"] == path]
+                if len(this_file) == 0:
+                    raise FileNotFoundError(path)
+                elif len(this_file) > 1:
+                    raise MultipleFilesError(path)
+                if this_file[0]["type"] == "directory":
+                    files = self._list_directory_by_id(
+                        this_file[0]["id"], trashed=trashed, path_prefix=path
+                    )
+                    self.dircache[path] = files
 
         if detail:
             return files
         else:
             return sorted([f["name"] for f in files])
+
+    def info(self, path, trashed=False):
+        path = self._strip_protocol(path)
+        if path == "":
+            return {
+                "name": path,
+                "mimeType": DIR_MIME_TYPE,
+                "type": "directory",
+                "size": 0,
+                "id": self.root_file_id,
+            }
+        return super().info(path, trashed=trashed)
 
     def _drive_kw(self):
         if self.drive is not None:
@@ -268,7 +319,7 @@ class GoogleDriveFileSystem(AbstractFileSystem):
             query += "and trashed = false "
         kwargs = self._drive_kw()
         while True:
-            logger.debug(query)
+            logger.debug("%s ; prefix %s", query, path_prefix)
             response = self.files.list(
                 q=query,
                 spaces=self.spaces,
@@ -284,42 +335,6 @@ class GoogleDriveFileSystem(AbstractFileSystem):
             if page_token is None:
                 break
         return all_files
-
-    def path_to_file_id(self, path, parent=None, trashed=False):
-        items = path.strip("/").split("/")
-        if path in ["", "/", "root", self.root_file_id]:
-            return self.root_file_id
-        if parent is None:
-            parent = self.root_file_id
-        top_file_id = self._get_directory_child_by_name(
-            items[0], parent, trashed=trashed
-        )
-        if len(items) == 1:
-            return top_file_id
-        else:
-            sub_path = "/".join(items[1:])
-            return self.path_to_file_id(sub_path, parent=top_file_id, trashed=trashed)
-
-    def _get_directory_child_by_name(
-        self, child_name, directory_file_id, trashed=False
-    ):
-        all_children = self._list_directory_by_id(directory_file_id, trashed=trashed)
-        possible_children = []
-        for child in all_children:
-            if child["name"] == child_name:
-                possible_children.append(child["id"])
-        if len(possible_children) == 0:
-            raise FileNotFoundError(
-                f"Directory {directory_file_id} has no child named {child_name}"
-            )
-        if len(possible_children) == 1:
-            return possible_children[0]
-        else:
-            raise KeyError(
-                f"Directory {directory_file_id} has more than one "
-                f"child named {child_name}. Unable to resolve path "
-                "to file_id."
-            )
 
     def _open(self, path, mode="rb", **kwargs):
         return GoogleDriveFile(self, path, mode=mode, **kwargs)
@@ -423,7 +438,13 @@ class GoogleDriveFile(AbstractBufferedFile):
         if status in [200, 201]:
             # server thinks we are finished - this should happen
             # only when closing
-            self.file_id = json.loads(body.decode())["id"]
+            blob = json.loads(body.decode())
+            self.file_id = blob["id"]
+            par = self.fs._parent(self.path)
+            # duplicate should not happen here, and parent should already exist
+            info = _finfo_from_response(blob, path_prefix=par)
+            info["size"] = self.tell()
+            self.fs.dircache[par].append(info)
         elif "range" in head:
             assert status == 308
         else:
@@ -437,7 +458,7 @@ class GoogleDriveFile(AbstractBufferedFile):
 
     def _initiate_upload(self):
         """Create multi-upload"""
-        parent_id = self.fs.path_to_file_id(self.fs._parent(self.path))
+        parent_id = self.fs.info(self.fs._parent(self.path))["id"]
         head = {"Content-Type": "application/json; charset=UTF-8"}
         # also allows description, MIME type, version, thumbnail...
         body = json.dumps(
@@ -445,8 +466,8 @@ class GoogleDriveFile(AbstractBufferedFile):
         ).encode()
         req = self.fs.files._http.request  # partial with correct creds
         # TODO : this creates a new file. If the file exists, you should
-        #   update it by getting the ID and using PATCH, else you get two
-        #   identically-named files
+        #   update it by getting the ID and using PATCH, or delete and recreate,
+        #   else you get two identically-named files
         r = req(
             "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true",
             method="POST",

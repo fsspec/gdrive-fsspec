@@ -1,6 +1,5 @@
 import os
 
-import fsspec.utils
 import pytest
 
 import gdrive_fsspec
@@ -12,7 +11,6 @@ kwargs = {
     "token": os.getenv("gdrive_fsspec_CREDENTIALS_TYPE", "service_account"),
     "drive": os.getenv("gdrive_fsspec_DRIVE"),
 }
-fsspec.utils.setup_logging(logger_name="gdrive_fsspec")
 
 
 @pytest.fixture()
