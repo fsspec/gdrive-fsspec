@@ -41,7 +41,12 @@ jobs:
 
     - name: run tests
       timeout-minutes: 15
-      run: "gdrive_fsspec_CREDENTIALS_PATH=${{ secrets.GDRIVE_SERVICE_ACCOUNT }} gdrive_fsspec_DRIVE=gdrivefs-testing pytest -vv"
+      env:
+        gdrive_fsspec_CREDENTIALS_PATH: ${{ secrets.GDRIVE_SERVICE_ACCOUNT }}
+        gdrive_fsspec_DRIVE: gdrivefs-testing
+      run: |
+        env
+        pytest -vv"
 
   lint:
     name: lint
