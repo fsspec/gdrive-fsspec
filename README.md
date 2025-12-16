@@ -66,7 +66,8 @@ See ``GoogleDriveFileSystem`` docstring for more details.
 ### Running tests
 
 The tests require defining the following environment variables:
-- gdrive_fsspec_CREDENTIALS_PATH: location of a credentials.json
+- gdrive_fsspec_CREDENTIALS_PATH: location of a credentials.json or the json blob itself
+ (starting with "{")
 - gdrive_fsspec_CREDENTIALS_TYPE: token type ("service_account" default)
 - gdrive_fsspec_DRIVE: shared drive to use.
 

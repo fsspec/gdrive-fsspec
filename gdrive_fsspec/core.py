@@ -154,7 +154,10 @@ class GoogleDriveFileSystem(AbstractFileSystem):
 
     def _connect_service_account(self):
         if isinstance(self.creds, str):
-            creds = json.load(open(self.creds))
+            if self.creds[0] != "{":
+                creds = json.load(open(self.creds))
+            else:
+                creds = json.loads(self.creds)
         else:
             creds = self.creds
         return service_account.Credentials.from_service_account_info(
