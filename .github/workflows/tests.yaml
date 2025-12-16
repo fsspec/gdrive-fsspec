@@ -45,7 +45,7 @@ jobs:
       timeout-minutes: 15
       env:
         gdrive_fsspec_DRIVE: gdrivefs-testing
-      run: pytest -vv"
+      run: pytest -vv
 
   lint:
     name: lint
