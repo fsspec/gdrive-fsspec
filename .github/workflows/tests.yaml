@@ -46,6 +46,7 @@ jobs:
       timeout-minutes: 15
       env:
         gdrive_fsspec_DRIVE: gdrivefs-testing
+        GDRIVE_FSSPEC_CREDENTIALS_PATH: ${{ secrets.GDRIVE_FSSPEC_CREDENTIALS_PATH }}
       run: |
         env
         pytest -vv
