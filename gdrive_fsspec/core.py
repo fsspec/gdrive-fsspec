@@ -215,7 +215,7 @@ class GoogleDriveFileSystem(AbstractFileSystem):
             listing = self.dircache[par]
             i = [i for i, li in enumerate(listing) if li["name"] == path][0]
             listing.pop(i)
-        self.dircache.pop(path)
+        self.dircache.pop(path, None)
 
     def rm(self, path, recursive=True, maxdepth=None):
         if recursive is False and self.isdir(path) and self.ls(path):
