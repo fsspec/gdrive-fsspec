@@ -40,12 +40,15 @@ jobs:
       run: |
         pip install --upgrade pip wheel
         pip install -e . pytest
+        pip list
 
     - name: run tests
       timeout-minutes: 15
       env:
         gdrive_fsspec_DRIVE: gdrivefs-testing
-      run: pytest -vv
+      run: |
+        env
+        pytest -vv
 
   lint:
     name: lint
