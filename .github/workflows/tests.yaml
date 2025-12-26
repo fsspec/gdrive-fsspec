@@ -14,21 +14,6 @@ permissions:
   contents: read
 
 jobs:
-  one:
-    environment:
-      name: env1
-    runs-on: "ubuntu-latest"
-    steps:
-      - name: Set up Python
-        uses: actions/setup-python@v4
-      - name: oi
-        env:
-          GDRIVE_FSSPEC_DRIVE: gdrivefs-testing
-          GDRIVE_FSSPEC_CREDENTIALS: ${{ secrets.GDRIVE_FSSPEC_CREDENTIALS_PATH }}
-          ANOTHER: ${{ secrets.other }}
-        run: |
-          python -c 'import os;print({k: len(v) for k, v in os.environ.items()})'
-
   tests:
     timeout-minutes: 45
     runs-on: ${{ matrix.os }}
@@ -63,9 +48,7 @@ jobs:
       env:
         GDRIVE_FSSPEC_DRIVE: gdrivefs-testing
         GDRIVE_FSSPEC_CREDENTIALS_PATH: ${{ secrets.GDRIVE_FSSPEC_CREDENTIALS_PATH }}
-      run: |
-        env
-        pytest -vv
+      run: pytest -vv
 
   lint:
     name: lint
