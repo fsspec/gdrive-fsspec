@@ -154,7 +154,10 @@ class GoogleDriveFileSystem(AbstractFileSystem):
 
     def _connect_service_account(self):
         if isinstance(self.creds, str):
-            creds = json.load(open(self.creds))
+            if self.creds[0] != "{":
+                creds = json.load(open(self.creds))
+            else:
+                creds = json.loads(self.creds)
         else:
             creds = self.creds
         return service_account.Credentials.from_service_account_info(
@@ -212,7 +215,7 @@ class GoogleDriveFileSystem(AbstractFileSystem):
             listing = self.dircache[par]
             i = [i for i, li in enumerate(listing) if li["name"] == path][0]
             listing.pop(i)
-        self.dircache.pop(path)
+        self.dircache.pop(path, None)
 
     def rm(self, path, recursive=True, maxdepth=None):
         if recursive is False and self.isdir(path) and self.ls(path):

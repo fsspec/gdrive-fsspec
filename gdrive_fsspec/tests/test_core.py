@@ -7,9 +7,9 @@ import gdrive_fsspec
 
 testdir = "gdrive_fsspec_testdir"
 kwargs = {
-    "creds": os.getenv("gdrive_fsspec_CREDENTIALS_PATH"),
-    "token": os.getenv("gdrive_fsspec_CREDENTIALS_TYPE", "service_account"),
-    "drive": os.getenv("gdrive_fsspec_DRIVE"),
+    "creds": os.getenv("GDRIVE_FSSPEC_CREDENTIALS_PATH"),
+    "token": os.getenv("GDRIVE_FSSPEC_CREDENTIALS_TYPE", "service_account"),
+    "drive": os.getenv("GDRIVE_FSSPEC_DRIVE"),
 }
 
 

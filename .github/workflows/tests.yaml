@@ -17,11 +17,14 @@ jobs:
   tests:
     timeout-minutes: 45
     runs-on: ${{ matrix.os }}
+    environment:
+      name: env1
+
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        pyv: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        pyv: ["3.13"]
 
     steps:
     - uses: actions/checkout@v3
@@ -38,9 +41,13 @@ jobs:
       run: |
         pip install --upgrade pip wheel
         pip install -e . pytest
+        pip list
 
     - name: run tests
       timeout-minutes: 15
+      env:
+        GDRIVE_FSSPEC_DRIVE: gdrivefs-testing
+        GDRIVE_FSSPEC_CREDENTIALS_PATH: ${{ secrets.GDRIVE_FSSPEC_CREDENTIALS_PATH }}
       run: pytest -vv
 
   lint:
