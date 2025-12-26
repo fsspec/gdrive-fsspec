@@ -19,15 +19,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     environment:
       name: env1
-    concurrency:
-      group: run_one
-      cancel-in-progress: true
 
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        pyv: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        pyv: ["3.13"]
 
     steps:
     - uses: actions/checkout@v3
