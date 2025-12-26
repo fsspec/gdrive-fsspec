@@ -19,6 +19,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     environment:
       name: env1
+    concurrency:
+      group: run_one
+      cancel-in-progress: true
 
     strategy:
       fail-fast: false
