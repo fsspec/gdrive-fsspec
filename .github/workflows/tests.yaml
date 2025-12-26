@@ -14,6 +14,18 @@ permissions:
   contents: read
 
 jobs:
+  one:
+    environment: env1
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v4
+      - name: oi
+        env:
+          GDRIVE_FSSPEC_DRIVE: gdrivefs-testing
+          GDRIVE_FSSPEC_CREDENTIALS_PATH: ${{ secrets.GDRIVE_FSSPEC_CREDENTIALS_PATH }}
+        run: |
+          python -c 'import os;print({k: len(v) for k, v in os.environ.items()})'
+
   tests:
     timeout-minutes: 45
     runs-on: ${{ matrix.os }}
