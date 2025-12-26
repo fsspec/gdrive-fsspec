@@ -15,7 +15,8 @@ permissions:
 
 jobs:
   one:
-    environment: env1
+    environment:
+      name: env1
     runs-on: "ubuntu-latest"
     steps:
       - name: Set up Python
