@@ -25,6 +25,7 @@ jobs:
         env:
           GDRIVE_FSSPEC_DRIVE: gdrivefs-testing
           GDRIVE_FSSPEC_CREDENTIALS: ${{ secrets.GDRIVE_FSSPEC_CREDENTIALS_PATH }}
+          ANOTHER: ${{ secrets.other }}
         run: |
           python -c 'import os;print({k: len(v) for k, v in os.environ.items()})'
 
