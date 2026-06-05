@@ -76,6 +76,7 @@ class GoogleDriveFileSystem(AbstractFileSystem):
         spaces="drive",
         creds=None,
         drive=None,
+        auth_kwargs=None,
         **kwargs,
     ):
         """
@@ -100,6 +101,9 @@ class GoogleDriveFileSystem(AbstractFileSystem):
             don't want the user to be prompted to authenticate.
             The files need to be shared with the service account email address, that can be found
             in the json file.
+        :param auth_kwargs: dict
+            Additional keyword arguments to pass to the authentication method.
+            Currently only used for the "cache" and "browser" methods.
         :param kwargs:
             Passed to parent
         """
@@ -108,6 +112,7 @@ class GoogleDriveFileSystem(AbstractFileSystem):
         self.scopes = [scope_dict[access]]
         self.spaces = spaces
         self.creds = creds
+        self.auth_kwargs = auth_kwargs or {}
         self.connect(method=token)
         if token == "anon":
             self.drive = None
@@ -149,10 +154,15 @@ class GoogleDriveFileSystem(AbstractFileSystem):
         import pydata_google_auth
 
         return pydata_google_auth.get_user_credentials(
-            self.scopes, use_local_webserver=True
+            self.scopes, use_local_webserver=True, **self.auth_kwargs
         )
 
     def _connect_service_account(self):
+        if self.creds is None:
+            raise ValueError(
+                "Service account credentials are required when token='service_account'. "
+                "Pass creds as a dict or path to a credentials JSON file."
+            )
         if isinstance(self.creds, str):
             if self.creds[0] != "{":
                 creds = json.load(open(self.creds))

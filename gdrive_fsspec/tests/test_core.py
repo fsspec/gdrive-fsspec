@@ -13,8 +13,17 @@ kwargs = {
 }
 
 
+def _credentials_configured():
+    token = os.getenv("GDRIVE_FSSPEC_CREDENTIALS_TYPE", "service_account")
+    if token == "service_account":
+        return os.getenv("GDRIVE_FSSPEC_CREDENTIALS_PATH") is not None
+    return True
+
+
 @pytest.fixture()
 def fs():
+    if not _credentials_configured():
+        pytest.skip("GDRIVE_FSSPEC_CREDENTIALS_PATH not set")
     fs = gdrive_fsspec.GoogleDriveFileSystem(**kwargs)
     if fs.exists(testdir):
         fs.rm(testdir, recursive=True)
@@ -33,6 +42,7 @@ def test_create_anon():
     assert fs.srv is not None
 
 
+@pytest.mark.integration
 def test_simple(fs):
     assert fs.ls("")
     data = b"hello"
@@ -42,6 +52,7 @@ def test_simple(fs):
     assert fs.cat(fn) == data
 
 
+@pytest.mark.integration
 def test_create_directory(fs):
     fs.makedirs(testdir + "/data")
     fs.makedirs(testdir + "/data/bar/baz")
@@ -54,3 +65,11 @@ def test_create_directory(fs):
     with fs.open(testdir + "/data/bar/test", "wb") as f:
         f.write(data)
     assert fs.cat(testdir + "/data/bar/test") == data
+
+
+def test_auth_kwargs():
+    fs = gdrive_fsspec.GoogleDriveFileSystem(
+        token="anon", auth_kwargs={"user_email": "test@example.com"}
+    )
+    assert fs.srv is not None
+    assert fs.auth_kwargs == {"user_email": "test@example.com"}
