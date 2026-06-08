@@ -48,7 +48,8 @@ jobs:
       env:
         GDRIVE_FSSPEC_DRIVE: gdrivefs-testing
         GDRIVE_FSSPEC_CREDENTIALS_PATH: ${{ secrets.GDRIVE_FSSPEC_CREDENTIALS_PATH }}
-      run: pytest -vv
+      # Override the default marker filter so CI runs integration tests too.
+      run: pytest -vv -m ""
 
   lint:
     name: lint
