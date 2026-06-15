@@ -31,6 +31,11 @@ dependencies = [
     "pydata_google_auth"
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
+
 [project.urls]
 Source = "http://github.com/fsspec/gdrive-fsspec"
 
