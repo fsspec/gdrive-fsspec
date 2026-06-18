@@ -77,24 +77,21 @@ See ``GoogleDriveFileSystem`` docstring for more details.
 
 ### Running tests
 
-The tests require defining the following environment variables:
-- gdrive_fsspec_CREDENTIALS_PATH: location of a credentials.json or the json blob itself
- (starting with "{")
-- gdrive_fsspec_CREDENTIALS_TYPE: token type ("service_account" default)
-- gdrive_fsspec_DRIVE: shared drive to use.
+The integration tests require the following environment variables:
 
-As can be seen, the assumption is, that a service account will be operating
-on a shared drive. This requires the account to be have full shared access to
-the drive.
+- `GDRIVE_FSSPEC_CREDENTIALS_PATH` — path to a service-account JSON, or the JSON string (starting with `{`). Required when using `service_account` (the default).
+- `GDRIVE_FSSPEC_CREDENTIALS_TYPE` — token type (`service_account` default; use `cache` or `browser` for user OAuth).
+- `GDRIVE_FSSPEC_DRIVE` — **Shared Drive name**. Required for service-account upload tests.
 
-You could use your own personal gdrive too, either by creating a credentials
-JSON, or by using type "cache" following successful browser-based auth.
+Service accounts cannot own files in Google Drive and have no storage quota. Uploads must target a [Shared Drive](https://developers.google.com/workspace/drive/api/guides/about-shareddrives) where the service account is a member with at least **Contributor** access. See [Google’s storage-limit errors](https://developers.google.com/workspace/drive/api/guides/handle-errors#storage-limit).
 
-All tests take place in a directory "gdrive_fsspec_testdir".
+For a personal Drive (no Shared Drive), run tests with user OAuth instead: `GDRIVE_FSSPEC_CREDENTIALS_TYPE=cache` after a one-time `browser` login.
+
+All tests use a directory named `gdrive_fsspec_testdir`.
 
 ```sh
 pip install -e . pytest
-pytest -v
+pytest -v -m ""
 ```
 
 ### Style
