@@ -105,4 +105,5 @@ ENV/
 # mypy
 .mypy_cache/
 
-/gdrivefs/_version.py
+/gdrive_fsspec/_version.py
+/tmp/*

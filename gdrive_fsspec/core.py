@@ -162,6 +162,8 @@ class GoogleDriveFileSystem(AbstractFileSystem):
 
     def _connect_service_account(self):
         if isinstance(self.creds, str):
+            if not self.creds.strip():
+                raise ValueError("Empty credentials are not allowed")
             if self.creds[0] != "{":
                 creds = json.load(open(self.creds))
             else:

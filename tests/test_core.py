@@ -17,7 +17,8 @@ TESTDIR = "gdrive_fsspec_testdir"
 def _credentials_configured():
     token = os.getenv("GDRIVE_FSSPEC_CREDENTIALS_TYPE", "service_account")
     if token == "service_account":
-        return os.getenv("GDRIVE_FSSPEC_CREDENTIALS_PATH") is not None
+        path = os.getenv("GDRIVE_FSSPEC_CREDENTIALS_PATH")
+        return bool(path and path.strip())
     return True
 
 
@@ -177,6 +178,14 @@ def test_service_account_creds_parsing(creds):
         )
     from_info.assert_called_once()
     assert from_info.call_args.kwargs["info"] == {"type": "service_account"}
+
+
+@pytest.mark.parametrize("creds", ["", "   ", "\t\n"])
+def test_service_account_empty_creds_raises(creds):
+    with pytest.raises(ValueError, match="Empty credentials"):
+        GoogleDriveFileSystem(
+            token="service_account", creds=creds, skip_instance_cache=True
+        )
 
 
 # ---------------------------------------------------------------------------
