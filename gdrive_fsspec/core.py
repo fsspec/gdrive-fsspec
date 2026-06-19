@@ -281,7 +281,7 @@ class GoogleDriveFileSystem(AbstractFileSystem):
             files = self._list_directory_by_id(
                 file_id, trashed=trashed, path_prefix=pref
             )
-            if files:
+            if files or path == "":
                 self.dircache[pref] = files
             else:
                 raise FileNotFoundError(path)
