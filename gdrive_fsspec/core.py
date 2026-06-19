@@ -237,6 +237,13 @@ class GoogleDriveFileSystem(AbstractFileSystem):
             raise ValueError("Path is not a directory")
         self.rm(path, recursive=False)
 
+    def invalidate_cache(self, path=None):
+        if path is None:
+            self.dircache.clear()
+        else:
+            self.dircache.pop(self._strip_protocol(path), None)
+        super().invalidate_cache(path)
+
     def export(self, path, mime_type):
         """Convert a google-native file to another format and download
 

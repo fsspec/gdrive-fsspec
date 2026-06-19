@@ -146,6 +146,25 @@ def test_root_info(anon_fs):
     assert info["id"] == anon_fs.root_file_id
 
 
+def test_invalidate_cache_path(anon_fs):
+    anon_fs.dircache["parent"] = [{"name": "parent/file"}]
+    anon_fs.dircache["other"] = [{"name": "other/file"}]
+
+    anon_fs.invalidate_cache("parent")
+
+    assert "parent" not in anon_fs.dircache
+    assert anon_fs.dircache["other"] == [{"name": "other/file"}]
+
+
+def test_invalidate_cache_all(anon_fs):
+    anon_fs.dircache["parent"] = [{"name": "parent/file"}]
+    anon_fs.dircache["other"] = [{"name": "other/file"}]
+
+    anon_fs.invalidate_cache()
+
+    assert anon_fs.dircache == {}
+
+
 def test_drive_id_from_name_single_match(anon_fs):
     anon_fs.drives = [{"id": "1", "name": "foo"}, {"id": "2", "name": "bar"}]
     assert anon_fs._drive_id_from_name("foo") == "1"
