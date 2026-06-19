@@ -457,7 +457,8 @@ class GoogleDriveFile(AbstractBufferedFile):
             # duplicate should not happen here, and parent should already exist
             info = _finfo_from_response(blob, path_prefix=par)
             info["size"] = self.tell()
-            self.fs.dircache[par].append(info)
+            if par in self.fs.dircache:
+                self.fs.dircache[par].append(info)
         elif "range" in head:
             assert status == 308
         else:

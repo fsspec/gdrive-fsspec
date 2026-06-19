@@ -1,3 +1,4 @@
+import json
 import os
 from unittest import mock
 
@@ -5,6 +6,7 @@ import pytest
 
 from gdrive_fsspec.core import (
     DIR_MIME_TYPE,
+    GoogleDriveFile,
     GoogleDriveFileSystem,
     _finfo_from_response,
     _normalize_path,
@@ -127,6 +129,29 @@ def test_invalid_access_raises():
 def test_access_scopes_mapping(access, expected_scopes):
     fs = GoogleDriveFileSystem(token="anon", access=access, skip_instance_cache=True)
     assert fs.scopes == expected_scopes
+
+
+def test_upload_chunk_without_parent_dircache():
+    fs = GoogleDriveFileSystem(
+        token="anon", skip_instance_cache=True, use_listings_cache=False
+    )
+    fs.files = mock.Mock()
+    fs.files._http.request.return_value = (
+        {"status": "200"},
+        json.dumps({"id": "file-id", "name": "file.txt", "size": "4"}).encode(),
+    )
+    file = GoogleDriveFile(fs, "parent/file.txt", mode="wb")
+    file.location = "https://example.invalid/upload?upload_id=1"
+    file.write(b"data")
+    file.offset = 0
+
+    try:
+        assert file._upload_chunk(final=True) is True
+    finally:
+        file.closed = True
+
+    assert "parent" not in fs.dircache
+    assert file.file_id == "file-id"
 
 
 def test_drive_kw_without_drive(anon_fs):
