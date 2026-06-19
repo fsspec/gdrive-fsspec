@@ -281,6 +281,14 @@ class GoogleDriveFileSystem(AbstractFileSystem):
             files = self._list_directory_by_id(
                 file_id, trashed=trashed, path_prefix=pref
             )
+            if (
+                path == ""
+                and not files
+                and self.drive is None
+                and file_id != "root"
+                and not self._file_id_exists(file_id)
+            ):
+                raise FileNotFoundError(path)
             if files or path == "":
                 self.dircache[pref] = files
             else:
@@ -315,6 +323,17 @@ class GoogleDriveFileSystem(AbstractFileSystem):
                 "id": self.root_file_id,
             }
         return super().info(path, trashed=trashed)
+
+    def _file_id_exists(self, file_id):
+        try:
+            self.files.get(
+                fileId=file_id, supportsAllDrives=True, fields="id"
+            ).execute()
+        except HttpError as e:
+            if e.resp.status == 404:
+                return False
+            raise
+        return True
 
     def _drive_kw(self):
         if self.drive is not None:
