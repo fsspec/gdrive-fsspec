@@ -1,0 +1,21 @@
+name: Setup
+description: Install uv and sync the project environment
+
+inputs:
+  python-version:
+    description: Python version for uv to install (defaults to uv's own default)
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install latest uv
+      uses: astral-sh/setup-uv@v8.2.0
+      with:
+        python-version: ${{ inputs.python-version }}
+        enable-cache: true
+
+    - name: Install dependencies
+      shell: bash
+      run: uv sync --all-groups

@@ -1,6 +1,6 @@
 import pytest
 
-from gdrive_fsspec.core import GoogleDriveFileSystem
+from gdrive_fsspec import GoogleDriveFileSystem
 
 
 @pytest.fixture()

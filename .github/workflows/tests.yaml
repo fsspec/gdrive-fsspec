@@ -1,4 +1,4 @@
-name: Tests
+name: CI
 
 on:
   push:
@@ -14,49 +14,67 @@ permissions:
   contents: read
 
 jobs:
-  tests:
-    timeout-minutes: 45
-    runs-on: ${{ matrix.os }}
-    environment:
-      name: env1
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
+      - uses: ./.github/actions/setup
+
+      - name: Run pre-commit
+        run: uvx pre-commit run --all-files
+
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
-        pyv: ["3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
 
     steps:
-    - uses: actions/checkout@v3
-      with:
-        fetch-depth: 0
-
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ matrix.pyv }}
-        cache: 'pip'
-
-    - name: install
-      run: |
-        pip install --upgrade pip wheel
-        pip install -e . pytest
-        pip list
-
-    - name: run tests
-      timeout-minutes: 15
-      env:
-        GDRIVE_FSSPEC_DRIVE: gdrivefs-testing
-        GDRIVE_FSSPEC_CREDENTIALS_PATH: ${{ secrets.GDRIVE_FSSPEC_CREDENTIALS_PATH }}
-      # Override the default marker filter so CI runs integration tests too.
-      run: pytest -vv -m ""
-
-  lint:
-    name: lint
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@main
-      - uses: actions/setup-python@main
+      - uses: actions/checkout@v7
         with:
-          python-version: "3.11"
-      - uses: pre-commit/action@main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run unit tests
+        run: uv run pytest -v
+
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    # Run only when Drive credentials are available: manual dispatch, pushes to
+    # master, or PRs from this repo (fork PRs are skipped — they cannot use secrets).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    timeout-minutes: 15
+    environment:
+      name: env1
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup
+        with:
+          python-version: "3.13"
+
+      - name: Run integration tests
+        env:
+          GDRIVE_FSSPEC_DRIVE: gdrivefs-testing
+          GDRIVE_FSSPEC_CREDENTIALS_PATH: ${{ secrets.GDRIVE_FSSPEC_CREDENTIALS_PATH }}
+        run: uv run pytest -v -m integration
