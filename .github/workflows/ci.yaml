@@ -66,6 +66,25 @@ jobs:
       - name: Run unit tests
         run: uv run pytest -v
 
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup
+        with:
+          python-version: "3.13"
+
+      - name: Run tests with coverage
+        run: |
+          uv run pytest \
+            --cov=gdrive_fsspec \
+            --cov-report=term-missing \
+            --cov-report=xml
+
   integration:
     name: Integration tests
     runs-on: ubuntu-latest

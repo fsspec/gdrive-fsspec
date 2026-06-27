@@ -52,6 +52,12 @@ uv run pyrefly check
 uv run pytest -v
 ```
 
+**Coverage** (same unit tests; reports missing lines):
+
+```sh
+uv run pytest --cov=gdrive_fsspec --cov-report=term-missing
+```
+
 ## Integration tests
 
 Integration tests use a real Google Drive account and a directory named `gdrive_fsspec_testdir` on Drive.

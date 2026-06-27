@@ -36,6 +36,7 @@ dependencies = [
 dev = [
     "pyrefly>=1.1.1",
     "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
     "ruff>=0.15.16",
 ]
 
@@ -66,3 +67,10 @@ project-includes = ["**/*.py*"]
 [tool.pyrefly.errors]
 unannotated-return = "error"
 unannotated-parameter = "error"
+
+[tool.coverage.run]
+source_pkgs = ["gdrive_fsspec"]
+omit = ["*/_version.py"]
+
+[tool.coverage.report]
+show_missing = true
