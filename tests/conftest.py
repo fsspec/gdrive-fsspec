@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass
-from typing import Any, Callable, Generator, cast, get_args
+from typing import Any, Callable, Generator, NamedTuple, cast, get_args
+from unittest import mock
 
 import pytest
 
@@ -10,6 +11,34 @@ from gdrive_fsspec.core import AuthMethod
 TESTDIR = "gdrive_fsspec_testdir"
 
 FsFactory = Callable[..., GoogleDriveFileSystem]
+
+
+def empty_headers() -> dict[str, str]:
+    return {}
+
+
+def empty_listing() -> list[dict[str, Any]]:
+    return []
+
+
+def empty_files_list_response() -> dict[str, Any]:
+    files: list[Any] = []
+    return {"files": files}
+
+
+class MockedDriveFS(NamedTuple):
+    fs: GoogleDriveFileSystem
+    files: mock.Mock
+    service: mock.Mock
+
+
+@pytest.fixture()
+def mocked_fs(anon_fs: GoogleDriveFileSystem) -> MockedDriveFS:
+    files = mock.Mock()
+    service = mock.Mock()
+    anon_fs.files = files
+    anon_fs.service = service
+    return MockedDriveFS(anon_fs, files, service)
 
 
 @pytest.fixture()
@@ -55,6 +84,13 @@ class DriveConfig:
 
 
 @pytest.fixture()
+def requires_shared_drive() -> None:
+    """Skip when ``GDRIVE_FSSPEC_DRIVE`` is not set (shared-drive-only scenarios)."""
+    if not os.getenv("GDRIVE_FSSPEC_DRIVE"):
+        pytest.skip("GDRIVE_FSSPEC_DRIVE not set")
+
+
+@pytest.fixture()
 def make_fs() -> Generator[FsFactory, None, None]:
     """Factory for live filesystems sharing one credential set and teardown.
 
@@ -63,7 +99,9 @@ def make_fs() -> Generator[FsFactory, None, None]:
     """
     config = DriveConfig.from_env()
     if not config.configured:
-        pytest.skip("GDRIVE_FSSPEC_CREDENTIALS_PATH not set")
+        if config.token == "service_account":
+            pytest.skip("GDRIVE_FSSPEC_CREDENTIALS_PATH not set")
+        pytest.skip("Google Drive credentials not configured")
 
     created: list[GoogleDriveFileSystem] = []
 
