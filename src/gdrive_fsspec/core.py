@@ -117,10 +117,12 @@ class GoogleDriveFileSystem(AbstractFileSystem):
                 A dict with the service account credentials from the GCP console (same
                 content as the downloaded JSON). See https://cloud.google.com/iam/docs/service-account-creds#key-types
                 Files must be shared with the service account email from that JSON.
-            drive (str or None): A shared-drive ID to scope API calls to. Resolved to a shared-drive ID via ``drives.list``; not
-                a raw drive ID. Required for service-account uploads. If omitted,
-                operations use the user's My Drive (or anonymous public files when ``token="anon"``).
-                Combine with ``root_file_id`` to start below the shared-drive root, e.g. a subfolder ID inside that drive.
+            drive (str or None): A shared drive to scope API calls to, given as either its
+                ID or its name. Resolved against the drives accessible to the
+                current credentials (via ``drives.list``). Required for service-account uploads.
+                If omitted, operations use the user's My Drive (or anonymous public files when
+                ``token="anon"``). Combine with ``root_file_id`` to start below the shared-drive
+                root, e.g. a subfolder ID inside that drive.
             auth_kwargs (dict or None): Additional keyword arguments passed to
                 the authentication backend (``pydata_google_auth.get_user_credentials`` for user OAuth, or
                 ``service_account.Credentials.from_service_account_info`` for service accounts).
@@ -141,7 +143,7 @@ class GoogleDriveFileSystem(AbstractFileSystem):
         if token == "anon":
             self.drive = None
         elif drive:
-            self.drive = self._drive_id_from_name(drive)
+            self.drive = self._resolve_drive_id(drive)
 
         if root_file_id and root_file_id != ROOT_ID:
             self._validate_root_file_id(root_file_id)
@@ -152,7 +154,7 @@ class GoogleDriveFileSystem(AbstractFileSystem):
         try:
             meta = self.files.get(
                 fileId=root_file_id,
-                fields="id,trashed,mimeType",
+                fields="id,trashed,mimeType,driveId",
                 supportsAllDrives=True,
             ).execute()
         except HttpError as err:
@@ -165,6 +167,11 @@ class GoogleDriveFileSystem(AbstractFileSystem):
             raise FileNotFoundError(f"root_file_id {root_file_id!r} is trashed")
         if meta.get("mimeType") != DIR_MIME_TYPE:
             raise NotADirectoryError(f"root_file_id {root_file_id!r} is not a folder")
+        # Check if the root file is in the correct drive.
+        if self.drive is not None and meta.get("driveId") != self.drive:
+            raise ValueError(
+                f"root_file_id {root_file_id!r} is not in drive {self.drive!r}"
+            )
 
     def _confirm_shared_drive_root(self, drive_id: str) -> None:
         """Accept a shared-drive ID passed as ``root_file_id`` (legacy).
@@ -183,9 +190,10 @@ class GoogleDriveFileSystem(AbstractFileSystem):
             raise
         if self.drive is None:
             self.drive = drive_id
-        # TODO(follow-up, issue #2): when self.drive is already set to a different
-        # drive, root_file_id and _drive_kw() scope to conflicting drives. This is
-        # pre-existing behaviour; raise on the conflict instead of silently ignoring.
+        elif self.drive != drive_id:
+            raise ValueError(
+                f"root_file_id {drive_id!r} conflicts with drive {self.drive!r}"
+            )
 
     def connect(self, method: AuthMethod | None = None) -> None:
         if method == "browser":
@@ -336,14 +344,20 @@ class GoogleDriveFileSystem(AbstractFileSystem):
             fileId=file_id, mimeType=mime_type, supportsAllDrives=True
         ).execute()
 
-    def _drive_id_from_name(self, name: str) -> str:
-        drive = [_["id"] for _ in self.drives if _["name"] == name]
-        if len(drive) == 0:
-            raise ValueError(f"Drive name {drive} not found")
-        elif len(drive) == 1:
-            return drive[0]
-        else:
-            raise ValueError(f"Drive name {drive} refers to multiple shared drives")
+    def _resolve_drive_id(self, drive: str) -> str:
+        """Resolve a shared-drive ``id`` or ``name`` to its drive ID.
+
+        ``drive`` may be either a raw shared-drive ID or its human-readable name;
+        both are matched against the drives accessible to the current credentials.
+        """
+        if any(d["id"] == drive for d in self.drives):
+            return drive
+        matches = [d["id"] for d in self.drives if d["name"] == drive]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) == 0:
+            raise ValueError(f"Drive {drive!r} not found by id or name")
+        raise ValueError(f"Drive name {drive!r} refers to multiple shared drives")
 
     @override
     # pyrefly: ignore [bad-override]
