@@ -180,9 +180,52 @@ def test_validate_root_file_id_accepts_folder(validation_fs: MockedDriveFS) -> N
 
     validation_fs.files.get.assert_called_once_with(
         fileId="folder-id",
-        fields="id,trashed,mimeType",
+        fields="id,trashed,mimeType,driveId",
         supportsAllDrives=True,
     )
+
+
+def test_validate_root_file_id_accepts_folder_in_scoped_drive(
+    validation_fs: MockedDriveFS,
+) -> None:
+    validation_fs.fs.drive = "drive-id"
+    validation_fs.files.get.return_value.execute.return_value = {
+        "id": "folder-id",
+        "trashed": False,
+        "mimeType": DIR_MIME_TYPE,
+        "driveId": "drive-id",
+    }
+
+    validation_fs.fs._validate_root_file_id("folder-id")
+
+
+def test_validate_root_file_id_rejects_folder_in_other_drive(
+    validation_fs: MockedDriveFS,
+) -> None:
+    validation_fs.fs.drive = "drive-id"
+    validation_fs.files.get.return_value.execute.return_value = {
+        "id": "folder-id",
+        "trashed": False,
+        "mimeType": DIR_MIME_TYPE,
+        "driveId": "other-drive",
+    }
+
+    with pytest.raises(ValueError, match="not in drive"):
+        validation_fs.fs._validate_root_file_id("folder-id")
+
+
+def test_validate_root_file_id_rejects_my_drive_folder_when_scoped(
+    validation_fs: MockedDriveFS,
+) -> None:
+    validation_fs.fs.drive = "drive-id"
+    validation_fs.files.get.return_value.execute.return_value = {
+        "id": "folder-id",
+        "trashed": False,
+        "mimeType": DIR_MIME_TYPE,
+    }
+
+    with pytest.raises(ValueError, match="not in drive"):
+        validation_fs.fs._validate_root_file_id("folder-id")
 
 
 def test_validate_root_file_id_rejects_non_folder(
@@ -228,7 +271,21 @@ def test_validate_root_file_id_accepts_drive_id_and_sets_drive(
     )
 
 
-def test_validate_root_file_id_drive_id_does_not_override_drive(
+def test_validate_root_file_id_accepts_matching_drive_id(
+    validation_fs: MockedDriveFS,
+) -> None:
+    validation_fs.fs.drive = "drive-id"
+    validation_fs.files.get.return_value.execute.side_effect = _http_error(404)
+    validation_fs.service.drives.return_value.get.return_value.execute.return_value = {
+        "id": "drive-id",
+    }
+
+    validation_fs.fs._validate_root_file_id("drive-id")
+
+    assert validation_fs.fs.drive == "drive-id"
+
+
+def test_validate_root_file_id_conflicting_drive_id_raises(
     validation_fs: MockedDriveFS,
 ) -> None:
     validation_fs.fs.drive = "existing-drive"
@@ -237,9 +294,8 @@ def test_validate_root_file_id_drive_id_does_not_override_drive(
         "id": "drive-id",
     }
 
-    validation_fs.fs._validate_root_file_id("drive-id")
-
-    assert validation_fs.fs.drive == "existing-drive"
+    with pytest.raises(ValueError, match="conflicts with drive"):
+        validation_fs.fs._validate_root_file_id("drive-id")
 
 
 def test_validate_root_file_id_missing(validation_fs: MockedDriveFS) -> None:
@@ -300,21 +356,26 @@ def test_invalidate_cache_all(anon_fs: GoogleDriveFileSystem) -> None:
     assert anon_fs.dircache == {}
 
 
-def test_drive_id_from_name_single_match(anon_fs: GoogleDriveFileSystem) -> None:
+def test_resolve_drive_id_by_name(anon_fs: GoogleDriveFileSystem) -> None:
     anon_fs.drives = [{"id": "1", "name": "foo"}, {"id": "2", "name": "bar"}]
-    assert anon_fs._drive_id_from_name("foo") == "1"
+    assert anon_fs._resolve_drive_id("foo") == "1"
 
 
-def test_drive_id_from_name_missing(anon_fs: GoogleDriveFileSystem) -> None:
+def test_resolve_drive_id_by_id(anon_fs: GoogleDriveFileSystem) -> None:
+    anon_fs.drives = [{"id": "1", "name": "foo"}, {"id": "2", "name": "bar"}]
+    assert anon_fs._resolve_drive_id("2") == "2"
+
+
+def test_resolve_drive_id_missing(anon_fs: GoogleDriveFileSystem) -> None:
     anon_fs.drives = [{"id": "1", "name": "foo"}]
-    with pytest.raises(ValueError):
-        anon_fs._drive_id_from_name("missing")
+    with pytest.raises(ValueError, match="not found by id or name"):
+        anon_fs._resolve_drive_id("missing")
 
 
-def test_drive_id_from_name_duplicate(anon_fs: GoogleDriveFileSystem) -> None:
+def test_resolve_drive_id_duplicate_name(anon_fs: GoogleDriveFileSystem) -> None:
     anon_fs.drives = [{"id": "1", "name": "dup"}, {"id": "2", "name": "dup"}]
-    with pytest.raises(ValueError):
-        anon_fs._drive_id_from_name("dup")
+    with pytest.raises(ValueError, match="multiple shared drives"):
+        anon_fs._resolve_drive_id("dup")
 
 
 @pytest.mark.parametrize(
