@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import warnings
 from functools import cached_property
 from typing import Any, Literal
 
@@ -15,12 +16,19 @@ from .typing_utils import override
 
 DEFAULT_BLOCK_SIZE = 5 * 2**20
 LOGGER = logging.getLogger("gdrive_fsspec")
+
+# https://developers.google.com/workspace/drive/api/guides/api-specific-auth
 SCOPE_DICT = {
     "full_control": "https://www.googleapis.com/auth/drive",
     "read_only": "https://www.googleapis.com/auth/drive.readonly",
 }
 
+# https://developers.google.com/workspace/drive/api/guides/mime-types
 DIR_MIME_TYPE = "application/vnd.google-apps.folder"
+
+# File resource fields; partial-response mask for files.list / files.get:
+# https://developers.google.com/workspace/drive/api/reference/rest/v3/files#resource
+# https://developers.google.com/workspace/drive/api/guides/performance#partial
 FIELDS = ",".join(
     [
         "name",
@@ -61,11 +69,13 @@ class MultipleFilesError(FileNotFoundError):
 
 
 AuthMethod = Literal["anon", "browser", "cache", "service_account"]
+ROOT_ID = "root"
 
 
 class GoogleDriveFileSystem(AbstractFileSystem):
     """
-    Access to google-drive as a file-system
+    Access to google-drive as a file-system. In the google drive API,
+    everything is a file resource. Folders are files with a special MIME type.
 
     Limitations:
     - we assume that each path identifies a unique file. In gdrive, it is
@@ -89,29 +99,33 @@ class GoogleDriveFileSystem(AbstractFileSystem):
     ) -> None:
         """
         Args:
-            root_file_id (str or None): If you have a share, drive or folder ID to treat as the FS root, enter
-                it here. Otherwise, you will get your default drive.
-            token (str): One of "anon", "browser", "cache", "service_account". Using "browser" will prompt a URL to
-                be put in a browser, and cache the response for future use with token="cache".
-                "browser" will remove any previously cached token file, if it exists.
+            root_file_id (str or None): Folder file ID to use as the filesystem root (the empty path ``""``).
+                Obtain it from a folder URL such as ``https://drive.google.com/drive/folders/<id>``.
+                If omitted, defaults to the shared-drive root when ``drive`` is set, otherwise ``"root"``
+                (the authenticated user's My Drive). A shared-drive ID is also accepted here for
+                backwards compatibility (when it cannot be resolved as a file, it is treated as a
+                shared drive and ``drive`` is set from it), but this is a legacy path; prefer passing
+                ``drive`` to target a shared drive.
+            token (str): One of "anon", "browser", "cache", "service_account".
+                Using "browser" will prompt a URL to be put in a browser, and
+                cache the response for future use with token="cache". "browser"
+                will remove any previously cached token file, if it exists.
             access (str): One of "full_control", "read_only".
-            spaces (str): Category of files to search; can be 'drive', 'appDataFolder' and 'photos'.
-                Of these, only the first is general.
-            creds (dict or None): Required just for "service_account" token, a dict containing the service account
-                credentials obtained in GCP console. The dict content is the same as the json file
-                downloaded from GCP console. More details can be found here:
-                https://cloud.google.com/iam/docs/service-account-creds#key-types
-                This credential can be useful when integrating with other GCP services, and when you
-                don't want the user to be prompted to authenticate.
-                The files need to be shared with the service account email address, that can be found
-                in the json file.
-            drive (str or None): The drive ID to use. If not provided, the default drive will be used.
-            auth_kwargs (dict or None): Additional keyword arguments passed to the authentication backend
-                (``pydata_google_auth.get_user_credentials`` for user OAuth, or
-                ``service_account.Credentials.from_service_account_info`` for service
-                accounts). For headless or remote environments where a local callback
-                server is unavailable, pass ``use_local_webserver=False`` to request a
-                token via the console.
+            spaces (str): Category of files to search; can be 'drive',
+                'appDataFolder' and 'photos'. Of these, only the first is general.
+            creds (dict or None): Required for "service_account" token.
+                A dict with the service account credentials from the GCP console (same
+                content as the downloaded JSON). See https://cloud.google.com/iam/docs/service-account-creds#key-types
+                Files must be shared with the service account email from that JSON.
+            drive (str or None): A shared-drive ID to scope API calls to. Resolved to a shared-drive ID via ``drives.list``; not
+                a raw drive ID. Required for service-account uploads. If omitted,
+                operations use the user's My Drive (or anonymous public files when ``token="anon"``).
+                Combine with ``root_file_id`` to start below the shared-drive root, e.g. a subfolder ID inside that drive.
+            auth_kwargs (dict or None): Additional keyword arguments passed to
+                the authentication backend (``pydata_google_auth.get_user_credentials`` for user OAuth, or
+                ``service_account.Credentials.from_service_account_info`` for service accounts).
+                For headless or remote environments where a local callback server is unavailable, pass
+                ``use_local_webserver=False`` to request a token via the console.
             **kwargs: Passed to parent.
         """
         # Ideally, these should be keyword-arguments, but to maintain backwards compatibility, we keep the existing API.
@@ -128,7 +142,50 @@ class GoogleDriveFileSystem(AbstractFileSystem):
             self.drive = None
         elif drive:
             self.drive = self._drive_id_from_name(drive)
-        self.root_file_id = root_file_id or self.drive or "root"
+
+        if root_file_id and root_file_id != ROOT_ID:
+            self._validate_root_file_id(root_file_id)
+
+        self.root_file_id = root_file_id or self.drive or ROOT_ID
+
+    def _validate_root_file_id(self, root_file_id: str) -> None:
+        try:
+            meta = self.files.get(
+                fileId=root_file_id,
+                fields="id,trashed,mimeType",
+                supportsAllDrives=True,
+            ).execute()
+        except HttpError as err:
+            if err.status_code != 404:
+                raise
+            self._confirm_shared_drive_root(root_file_id)
+            return
+
+        if meta.get("trashed"):
+            raise FileNotFoundError(f"root_file_id {root_file_id!r} is trashed")
+        if meta.get("mimeType") != DIR_MIME_TYPE:
+            raise NotADirectoryError(f"root_file_id {root_file_id!r} is not a folder")
+
+    def _confirm_shared_drive_root(self, drive_id: str) -> None:
+        """Accept a shared-drive ID passed as ``root_file_id`` (legacy).
+
+        Older versions documented ``root_file_id`` as accepting a "share, drive or
+        folder ID", so a shared-drive ID may be passed here. When the ID does not
+        resolve as a file, fall back to treating it as a shared drive and set
+        ``self.drive`` from it so directory listings are scoped correctly. Prefer
+        passing ``drive`` instead.
+        """
+        try:
+            self.service.drives().get(driveId=drive_id).execute()
+        except HttpError as err:
+            if err.status_code == 404:
+                raise FileNotFoundError(f"root_file_id {drive_id!r} not found") from err
+            raise
+        if self.drive is None:
+            self.drive = drive_id
+        # TODO(follow-up, issue #2): when self.drive is already set to a different
+        # drive, root_file_id and _drive_kw() scope to conflicting drives. This is
+        # pre-existing behaviour; raise on the conflict instead of silently ignoring.
 
     def connect(self, method: AuthMethod | None = None) -> None:
         if method == "browser":
@@ -141,10 +198,18 @@ class GoogleDriveFileSystem(AbstractFileSystem):
             cred = self._connect_service_account()
         else:
             raise ValueError(f"Invalid connection method `{method}`.")
-        srv = build("drive", "v3", credentials=cred)
-        self.srv = srv
-        # pyrefly: ignore [missing-attribute]
-        self.files = srv.files()
+        self.service = build("drive", "v3", credentials=cred)
+        self.files = self.service.files()
+
+    @property
+    def srv(self) -> Any:
+        """Deprecated alias for :attr:`service`."""
+        warnings.warn(
+            "`srv` is deprecated; use `service` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.service
 
     @property
     def _user_credentials_cache_path(self) -> str:
@@ -185,8 +250,8 @@ class GoogleDriveFileSystem(AbstractFileSystem):
         out: list[Any] = []
         page_token = None
         while True:
-            # pyrefly: ignore [missing-attribute]
-            ret = self.srv.drives().list(pageToken=page_token).execute()
+            # pyrefly: ignore [bad-argument-type]
+            ret = self.service.drives().list(pageToken=page_token).execute()
             out.extend(ret["drives"])
             page_token = ret.get("nextPageToken")
             if page_token is None:
@@ -209,6 +274,7 @@ class GoogleDriveFileSystem(AbstractFileSystem):
         LOGGER.debug(f"Creating {path}, child of {parent_id}")
         out = self.files.create(body=meta, supportsAllDrives=True).execute()
         if par in self.dircache:
+            # pyrefly: ignore [bad-argument-type]
             self.dircache[par].append(_finfo_from_response(out, path_prefix=par))
         self.dircache[path] = []
         return out
@@ -290,8 +356,8 @@ class GoogleDriveFileSystem(AbstractFileSystem):
             if "/" in stripped_path:
                 # pyrefly: ignore [missing-attribute]
                 pref = stripped_path.rsplit("/", 1)[0]
-                inf = self.info(pref, trashed=trashed)
-                file_id = inf["id"]
+                info = self.info(pref, trashed=trashed)
+                file_id = info["id"]
             else:
                 pref = ""
                 file_id = self.root_file_id
@@ -300,7 +366,9 @@ class GoogleDriveFileSystem(AbstractFileSystem):
             files = self._list_directory_by_id(
                 file_id, trashed=trashed, path_prefix=pref
             )
-            if files:
+            # An empty listing for the root is a valid, empty directory; for any
+            # other path an empty listing means the path does not exist.
+            if files or stripped_path == "":
                 self.dircache[pref] = files
             else:
                 raise FileNotFoundError(stripped_path)
@@ -358,7 +426,7 @@ class GoogleDriveFileSystem(AbstractFileSystem):
         all_files = []
         page_token = None
         afields = "nextPageToken, files(%s)" % FIELDS
-        if file_id == "root" and self.drive is not None:
+        if file_id == ROOT_ID and self.drive is not None:
             query = f"'{self.drive}' in parents "
         else:
             query = f"'{file_id}' in parents "
@@ -371,12 +439,14 @@ class GoogleDriveFileSystem(AbstractFileSystem):
                 q=query,
                 spaces=self.spaces,
                 fields=afields,
+                # pyrefly: ignore [bad-argument-type]
                 pageToken=page_token,
                 orderBy="name",
                 pageSize=1000,
                 **kwargs,
             ).execute()
             for f in response.get("files", []):
+                # pyrefly: ignore [bad-argument-type]
                 all_files.append(_finfo_from_response(f, path_prefix))
             page_token = response.get("nextPageToken", None)
             if page_token is None:

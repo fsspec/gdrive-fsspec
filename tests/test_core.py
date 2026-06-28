@@ -1,9 +1,10 @@
 import json
-import os
-from typing import Any, Generator, Literal, cast
+from typing import Any, Literal, NamedTuple, cast
 from unittest import mock
 
 import pytest
+from conftest import TESTDIR, FsFactory
+from googleapiclient.errors import HttpError
 
 from gdrive_fsspec.core import (
     DIR_MIME_TYPE,
@@ -12,50 +13,6 @@ from gdrive_fsspec.core import (
     _finfo_from_response,
     _normalize_path,
 )
-
-TESTDIR = "gdrive_fsspec_testdir"
-
-
-def _credentials_configured() -> bool:
-    token = os.getenv("GDRIVE_FSSPEC_CREDENTIALS_TYPE", "service_account")
-    if token == "service_account":
-        path = os.getenv("GDRIVE_FSSPEC_CREDENTIALS_PATH")
-        return bool(path and path.strip())
-    return True
-
-
-@pytest.fixture()
-def fs() -> Generator[GoogleDriveFileSystem, None, None]:
-    if not _credentials_configured():
-        pytest.skip("GDRIVE_FSSPEC_CREDENTIALS_PATH not set")
-    creds_path = os.getenv("GDRIVE_FSSPEC_CREDENTIALS_PATH")
-
-    token = os.getenv("GDRIVE_FSSPEC_CREDENTIALS_TYPE", "service_account")
-    if isinstance(token, str) and token not in [
-        "anon",
-        "browser",
-        "cache",
-        "service_account",
-    ]:
-        raise ValueError(f"Invalid token: {token}")
-
-    fs = GoogleDriveFileSystem(
-        skip_instance_cache=True,
-        creds=creds_path,
-        token=token,
-        drive=os.getenv("GDRIVE_FSSPEC_DRIVE"),
-    )
-    if fs.exists(TESTDIR):
-        fs.rm(TESTDIR, recursive=True)
-    fs.mkdir(TESTDIR, create_parents=True)
-    try:
-        yield fs
-    finally:
-        try:
-            fs.rm(TESTDIR, recursive=True)
-        except IOError:
-            pass
-
 
 # ---------------------------------------------------------------------------
 # Pure helpers
@@ -107,7 +64,12 @@ def test_finfo_from_response_strips_leading_slash() -> None:
 
 
 def test_create_anon(anon_fs: GoogleDriveFileSystem) -> None:
-    assert anon_fs.srv is not None
+    assert anon_fs.service is not None
+
+
+def test_srv_is_deprecated_alias(anon_fs: GoogleDriveFileSystem) -> None:
+    with pytest.warns(DeprecationWarning):
+        assert anon_fs.srv is anon_fs.service
 
 
 def test_auth_kwargs() -> None:
@@ -116,7 +78,7 @@ def test_auth_kwargs() -> None:
         auth_kwargs={"user_email": "test@example.com"},
         skip_instance_cache=True,
     )
-    assert fs.srv is not None
+    assert fs.service is not None
     assert fs.auth_kwargs == {"user_email": "test@example.com"}
 
 
@@ -187,6 +149,138 @@ def test_root_info(anon_fs: GoogleDriveFileSystem) -> None:
     assert info["id"] == anon_fs.root_file_id
 
 
+class MockedDriveFS(NamedTuple):
+    fs: GoogleDriveFileSystem
+    files: mock.Mock
+    service: mock.Mock
+
+
+@pytest.fixture()
+def validation_fs(anon_fs: GoogleDriveFileSystem) -> MockedDriveFS:
+    files = mock.Mock()
+    service = mock.Mock()
+    anon_fs.files = files
+    anon_fs.service = service
+    return MockedDriveFS(anon_fs, files, service)
+
+
+def _http_error(status: int) -> HttpError:
+    resp = mock.Mock(status=status, reason="Error")
+    return HttpError(resp, b'{"error": {"message": "x"}}')
+
+
+def test_validate_root_file_id_accepts_folder(validation_fs: MockedDriveFS) -> None:
+    validation_fs.files.get.return_value.execute.return_value = {
+        "id": "folder-id",
+        "trashed": False,
+        "mimeType": DIR_MIME_TYPE,
+    }
+
+    validation_fs.fs._validate_root_file_id("folder-id")
+
+    validation_fs.files.get.assert_called_once_with(
+        fileId="folder-id",
+        fields="id,trashed,mimeType",
+        supportsAllDrives=True,
+    )
+
+
+def test_validate_root_file_id_rejects_non_folder(
+    validation_fs: MockedDriveFS,
+) -> None:
+    validation_fs.files.get.return_value.execute.return_value = {
+        "id": "file-id",
+        "trashed": False,
+        "mimeType": "text/plain",
+    }
+
+    with pytest.raises(NotADirectoryError, match="not a folder"):
+        validation_fs.fs._validate_root_file_id("file-id")
+
+
+def test_validate_root_file_id_rejects_trashed_folder(
+    validation_fs: MockedDriveFS,
+) -> None:
+    validation_fs.files.get.return_value.execute.return_value = {
+        "id": "folder-id",
+        "trashed": True,
+        "mimeType": DIR_MIME_TYPE,
+    }
+
+    with pytest.raises(FileNotFoundError, match="trashed"):
+        validation_fs.fs._validate_root_file_id("folder-id")
+
+
+def test_validate_root_file_id_accepts_drive_id_and_sets_drive(
+    validation_fs: MockedDriveFS,
+) -> None:
+    validation_fs.fs.drive = None
+    validation_fs.files.get.return_value.execute.side_effect = _http_error(404)
+    validation_fs.service.drives.return_value.get.return_value.execute.return_value = {
+        "id": "drive-id",
+    }
+
+    validation_fs.fs._validate_root_file_id("drive-id")
+
+    assert validation_fs.fs.drive == "drive-id"
+    validation_fs.service.drives.return_value.get.assert_called_once_with(
+        driveId="drive-id"
+    )
+
+
+def test_validate_root_file_id_drive_id_does_not_override_drive(
+    validation_fs: MockedDriveFS,
+) -> None:
+    validation_fs.fs.drive = "existing-drive"
+    validation_fs.files.get.return_value.execute.side_effect = _http_error(404)
+    validation_fs.service.drives.return_value.get.return_value.execute.return_value = {
+        "id": "drive-id",
+    }
+
+    validation_fs.fs._validate_root_file_id("drive-id")
+
+    assert validation_fs.fs.drive == "existing-drive"
+
+
+def test_validate_root_file_id_missing(validation_fs: MockedDriveFS) -> None:
+    validation_fs.files.get.return_value.execute.side_effect = _http_error(404)
+    validation_fs.service.drives.return_value.get.return_value.execute.side_effect = (
+        _http_error(404)
+    )
+
+    with pytest.raises(FileNotFoundError, match="not found"):
+        validation_fs.fs._validate_root_file_id("missing-id")
+
+
+def test_validate_root_file_id_propagates_drive_permission_error(
+    validation_fs: MockedDriveFS,
+) -> None:
+    validation_fs.files.get.return_value.execute.side_effect = _http_error(404)
+    validation_fs.service.drives.return_value.get.return_value.execute.side_effect = (
+        _http_error(403)
+    )
+
+    with pytest.raises(HttpError) as exc_info:
+        validation_fs.fs._validate_root_file_id("drive-id")
+    assert exc_info.value.status_code == 403
+
+
+def test_ls_empty_root_returns_empty(anon_fs: GoogleDriveFileSystem) -> None:
+    anon_fs._list_directory_by_id = mock.Mock(return_value=[])
+
+    assert anon_fs.ls("") == []
+    assert anon_fs.dircache[""] == []
+
+
+def test_ls_missing_path_on_empty_root_raises(
+    anon_fs: GoogleDriveFileSystem,
+) -> None:
+    anon_fs._list_directory_by_id = mock.Mock(return_value=[])
+
+    with pytest.raises(FileNotFoundError):
+        anon_fs.ls("missing")
+
+
 def test_invalidate_cache_path(anon_fs: GoogleDriveFileSystem) -> None:
     anon_fs.dircache["parent"] = [{"name": "parent/file"}]
     anon_fs.dircache["other"] = [{"name": "other/file"}]
@@ -255,6 +349,38 @@ def test_service_account_empty_creds_raises(creds: str) -> None:
 # ---------------------------------------------------------------------------
 # Integration (require live Google Drive credentials)
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_root_file_id_rejects_file(
+    fs: GoogleDriveFileSystem, make_fs: FsFactory
+) -> None:
+    """A regular file ID must not be accepted as the filesystem root."""
+    fn = TESTDIR + "/root_is_a_file"
+    with fs.open(fn, "wb") as f:
+        # pyrefly: ignore [bad-argument-type]
+        f.write(b"x")
+    file_id = fs.info(fn)["id"]
+
+    with pytest.raises(NotADirectoryError):
+        make_fs(root_file_id=file_id)
+
+
+@pytest.mark.integration
+def test_root_file_id_accepts_folder(
+    fs: GoogleDriveFileSystem, make_fs: FsFactory
+) -> None:
+    """A folder ID is a valid root and lists its children from ``ls("")``."""
+    folder = TESTDIR + "/root_folder"
+    fs.mkdir(folder)
+    with fs.open(folder + "/child", "wb") as f:
+        # pyrefly: ignore [bad-argument-type]
+        f.write(b"data")
+    folder_id = fs.info(folder)["id"]
+
+    rooted = make_fs(root_file_id=folder_id)
+    names = [item["name"] for item in rooted.ls("", detail=True)]
+    assert "child" in names
 
 
 @pytest.mark.integration
