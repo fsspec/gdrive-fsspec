@@ -1,0 +1,57 @@
+name: 🐛 gdrive_fsspec Bug
+description: Report a bug or unexpected behavior in gdrive_fsspec
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for contributing to gdrive_fsspec! ✊
+        Please provide as much information as possible to help us reproduce and fix your issue quickly.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Initial Checks
+      description: Just making sure we're on the same page.
+      options:
+        - label: I'm using the [latest version](https://github.com/Light2Dark/gdrive_fsspec/releases/latest) of gdrive_fsspec
+          required: true
+        - label: I've searched for my issue in [the issue tracker](https://github.com/Light2Dark/gdrive_fsspec/issues) before opening this issue
+          required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: |
+        Please explain what you're seeing and what you would expect to see.
+        - **A line of code is worth a thousand words**: you can include a minimal, reproducible example below.
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Minimal, Reproducible Example
+      description: >
+        If at all possible, please add a self-contained,
+        [minimal, reproducible example](https://stackoverflow.com/help/minimal-reproducible-example)
+        that demonstrates the bug.
+        (This will be automatically formatted as code, so no need for backticks.)
+      placeholder: |
+        from gdrive_fsspec import GoogleDriveFileSystem
+
+        fs = GoogleDriveFileSystem(
+            token="browser",
+            skip_instance_cache=True
+        )
+        ...
+      render: Python
+  - type: textarea
+    id: version
+    attributes:
+      label: Python, gdrive_fsspec & fsspec version
+      description: |
+        Which version of Python, gdrive_fsspec, and fsspec are you using?
+      value: |
+        - Python:
+        - gdrive_fsspec:
+    validations:
+      required: true
