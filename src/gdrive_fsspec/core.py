@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
@@ -14,6 +15,7 @@ from google.auth.credentials import AnonymousCredentials, Credentials
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaIoBaseDownload
 
 from .types import FileInfo
 from .typing_utils import override
@@ -307,6 +309,21 @@ class GoogleDriveFileSystem(AbstractFileSystem):
                 break
         return drives
 
+    @cached_property
+    def export_formats(self) -> dict[str, list[str]]:
+        """Supported export conversions, keyed by source MIME type.
+
+        Maps each Google-native MIME type (e.g.
+        ``application/vnd.google-apps.document``) to the list of target MIME
+        types it can be exported to. Fetched once from the Drive ``about``
+        resource and cached for the lifetime of the filesystem.
+
+        Returns:
+            Mapping of source MIME type to its list of valid export targets.
+        """
+        about = self.service.about().get(fields="exportFormats").execute()
+        return about.get("exportFormats", {})
+
     def _path_str(self, path: PathLike) -> str:
         """Strip the protocol and normalize a path-like input to a single string.
 
@@ -448,19 +465,34 @@ class GoogleDriveFileSystem(AbstractFileSystem):
         Args:
             path: Path of the Google-native file to export.
             mime_type: Target MIME type for the export (e.g. ``"text/plain"``).
+                Must be one of the conversions Drive supports for this file's
+                type; see :attr:`export_formats`.
 
         Returns:
-            Raw response bytes from the Drive API export endpoint.
+            Exported file content as bytes.
+
+        Raises:
+            ValueError: If ``mime_type`` is not a supported export target for
+                this file's source type.
         """
-        # pyrefly: ignore [missing-attribute]
-        # TODO: use export_media; cast needed because export().execute() is Any in stubs
-        file_id = self.path_to_file_id(path)
-        return cast(
-            bytes,
-            self.files.export(
-                fileId=file_id, mimeType=mime_type, supportsAllDrives=True
-            ).execute(),
-        )
+        info = self.info(path)
+        file_id = info["id"]
+        source_mime = info.get("mimeType", "")
+        targets = self.export_formats.get(source_mime, [])
+        if mime_type not in targets:
+            valid = ", ".join(targets) if targets else "none"
+            raise ValueError(
+                f"Cannot export {path!r} (type {source_mime!r}) to "
+                f"{mime_type!r}. Supported export types: {valid}."
+            )
+
+        request = self.files.export_media(fileId=file_id, mimeType=mime_type)
+        buffer = io.BytesIO()
+        downloader = MediaIoBaseDownload(buffer, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        return buffer.getvalue()
 
     def _resolve_drive_id(self, drive: str) -> str:
         """Resolve a shared-drive ID or name to its drive ID.

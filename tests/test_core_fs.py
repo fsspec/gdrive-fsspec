@@ -398,22 +398,63 @@ def test_drives_paginates(mocked_fs: MockedDriveFS) -> None:
     assert fs.drives == [{"id": "1", "name": "a"}, {"id": "2", "name": "b"}]
 
 
-@pytest.mark.xfail(
-    reason="export() calls self.path_to_file_id, which does not exist; "
-    "it should resolve the id via self.info(path)['id'] like rm_file/ls",
-    strict=True,
-    raises=AttributeError,
-)
-def test_export_calls_files_export_when_path_resolves(
-    mocked_fs: MockedDriveFS,
-) -> None:
+DOC_MIME = "application/vnd.google-apps.document"
+
+
+def _set_export_formats(fs: GoogleDriveFileSystem, formats: dict[str, Any]) -> None:
+    # export_formats is a cached_property; seed its cache so service.about() is
+    # not hit during the test.
+    fs.__dict__["export_formats"] = formats
+
+
+def test_export_streams_via_export_media(mocked_fs: MockedDriveFS) -> None:
     fs = mocked_fs.fs
-    fs.info = mock.Mock(return_value={"id": "doc-id"})
-    mocked_fs.files.export.return_value.execute.return_value = b"exported"
+    fs.info = mock.Mock(return_value={"id": "doc-id", "mimeType": DOC_MIME})
+    _set_export_formats(fs, {DOC_MIME: ["text/plain", "application/pdf"]})
+    request = mock.Mock()
+    mocked_fs.files.export_media.return_value = request
 
-    result = fs.export("doc.gdoc", "text/plain")
+    def fake_downloader(buffer: Any, req: Any) -> mock.Mock:
+        assert req is request
+        downloader = mock.Mock()
+        # Two chunks, then done; second next_chunk reports completion.
+        chunks = iter([b"expo", b"rted"])
 
-    mocked_fs.files.export.assert_called_once_with(
-        fileId="doc-id", mimeType="text/plain", supportsAllDrives=True
+        def next_chunk() -> tuple[mock.Mock, bool]:
+            buffer.write(next(chunks))
+            done = buffer.getvalue() == b"exported"
+            return mock.Mock(), done
+
+        downloader.next_chunk.side_effect = next_chunk
+        return downloader
+
+    with mock.patch("gdrive_fsspec.core.MediaIoBaseDownload", fake_downloader):
+        result = fs.export("doc.gdoc", "text/plain")
+
+    mocked_fs.files.export_media.assert_called_once_with(
+        fileId="doc-id", mimeType="text/plain"
     )
     assert result == b"exported"
+
+
+def test_export_rejects_unsupported_mime_type(mocked_fs: MockedDriveFS) -> None:
+    fs = mocked_fs.fs
+    fs.info = mock.Mock(return_value={"id": "doc-id", "mimeType": DOC_MIME})
+    _set_export_formats(fs, {DOC_MIME: ["text/plain", "application/pdf"]})
+
+    with pytest.raises(ValueError, match="text/plain, application/pdf"):
+        fs.export("doc.gdoc", "text/doc")
+
+    mocked_fs.files.export_media.assert_not_called()
+
+
+def test_export_formats_queries_about_resource(mocked_fs: MockedDriveFS) -> None:
+    fs = mocked_fs.fs
+    expected = {DOC_MIME: ["text/plain"]}
+    mocked_fs.service.about().get().execute.return_value = {"exportFormats": expected}
+
+    assert fs.export_formats == expected
+    # cached_property: second access does not re-query
+    mocked_fs.service.about.reset_mock()
+    assert fs.export_formats == expected
+    mocked_fs.service.about.assert_not_called()
