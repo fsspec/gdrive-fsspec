@@ -400,6 +400,7 @@ class GoogleDriveFileSystem(AbstractFileSystem):
             elif i == len(parts) - 1 and not exist_ok:
                 raise FileExistsError(path)
 
+    # We overwrite the base class _rm's method instead of rm_file because rm_file expects a "Never" return
     @override
     def _rm(self, path: PathLike, file_id: str | None = None) -> None:
         """Delete a single file or directory by path.
