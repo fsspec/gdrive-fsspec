@@ -28,17 +28,22 @@ dependencies = [
     "google-api-python-client",
     "google-auth-httplib2",
     "google-auth-oauthlib",
-    "pydata_google_auth"
+    "pydata_google_auth",
+    "typing-extensions>=4.15.0",
 ]
 
 [dependency-groups]
 dev = [
+    "google-api-python-client-stubs>=1.37.0",
+    "pyrefly>=1.1.1",
     "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
     "ruff>=0.15.16",
 ]
 
 [project.urls]
 Source = "http://github.com/fsspec/gdrive-fsspec"
+Contributing = "https://github.com/fsspec/gdrive-fsspec/blob/master/CONTRIBUTING.md"
 
 [tool.setuptools_scm]
 version_file = "src/gdrive_fsspec/_version.py"
@@ -52,3 +57,23 @@ addopts = """\
 markers = [
     "integration: marks test as integration test consuming external resources (select with '-m integration')",
 ]
+
+[tool.ruff.lint]
+extend-select = ["I", "B"]
+
+[tool.pyrefly]
+preset = "strict"
+project-includes = ["**/*.py*"]
+search-path = ["tests"]
+
+[tool.pyrefly.errors]
+unannotated-return = "error"
+unannotated-parameter = "error"
+
+[tool.coverage.run]
+source_pkgs = ["gdrive_fsspec"]
+omit = ["*/_version.py"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 95

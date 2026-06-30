@@ -1,141 +1,110 @@
-# Google Drive fsspec implementation
+# gdrive-fsspec
 
-This is an implementation of the fsspec interface for Google Drive.
+<p align="center">
+  <img src="assets/google-drive-icon.svg" alt="Google Drive" width="80">
+</p>
 
-This software is in beta stage and should not be relied upon in production settings.
+<p align="center">
+  <a href="https://github.com/fsspec/gdrive-fsspec/actions/workflows/ci.yaml"><img src="https://github.com/fsspec/gdrive-fsspec/actions/workflows/ci.yaml/badge.svg" alt="CI"></a>
+  <a href="https://pypi.org/project/gdrive-fsspec/"><img src="https://img.shields.io/pypi/v/gdrive-fsspec.svg" alt="PyPI"></a>
+  <a href="https://pypi.org/project/gdrive-fsspec/"><img src="https://img.shields.io/pypi/pyversions/gdrive-fsspec.svg" alt="Python versions"></a>
+  <a href="https://github.com/fsspec/gdrive-fsspec/blob/master/LICENSE"><img src="https://img.shields.io/github/license/fsspec/gdrive-fsspec.svg" alt="license"></a>
+</p>
+
+<p align="center">
+  <a href="https://filesystem-spec.readthedocs.io/en/latest/usage.html"><strong>fsspec docs</strong></a> ·
+  <a href="https://github.com/fsspec/gdrive-fsspec/blob/master/CONTRIBUTING.md"><strong>contributing</strong></a>
+</p>
+
+> **Note:** This software is in beta and should not be relied on in production settings.
+
+---
+
+**gdrive-fsspec** implements the [fsspec](https://filesystem-spec.readthedocs.io/) interface for Google Drive. List directories, read and write files, and plug into any library that speaks fsspec.
+
+## Quickstart
+
+```sh
+pip install gdrive_fsspec
+```
+
+```python
+from gdrive_fsspec import GoogleDriveFileSystem
+
+# First run: token="browser". Later: token="cache"
+fs = GoogleDriveFileSystem(token="cache")
+
+for entry in fs.ls(""):
+    print(entry["name"], entry["type"])
+
+with fs.open("my-folder/data.csv", "rb") as f:
+    print(f.read())
+```
+
+Most filesystem operations follow the [fsspec usage guide](https://filesystem-spec.readthedocs.io/en/latest/usage.html).
+
+## Why use gdrive-fsspec
+
+1. **fsspec-native** — same API as S3, GCS, and local filesystems; works with ecosystem tools that accept an `AbstractFileSystem`.
+2. **Flexible auth** — user OAuth, service accounts, or anonymous read-only access to public files.
+3. **Shared Drives** — target a Shared Drive by name via the `drive=` argument (required for service-account uploads).
+4. **Scoped access** — `read_only` or `full_control` OAuth scopes.
+
+## Authentication
+
+### User OAuth (personal Drive)
+
+A browser opens on first use; the token is cached for later sessions.
+
+```python
+fs = GoogleDriveFileSystem(token="browser")  # first time
+fs = GoogleDriveFileSystem(token="cache")    # reuse cached token
+```
+
+On headless or remote machines (SSH, containers, CI), pass `use_local_webserver=False` in `auth_kwargs` to authenticate via the console:
+
+```python
+fs = GoogleDriveFileSystem(
+    token="browser",
+    auth_kwargs={"use_local_webserver": False},
+)
+```
+
+### Service account
+
+Provide a dict with the service account credentials from the GCP console (same content as the downloaded JSON). See [Google's service account key docs](https://cloud.google.com/iam/docs/service-account-creds#key-types).
+
+```python
+fs = GoogleDriveFileSystem(
+    creds=service_account_credentials,
+    token="service_account",
+    drive="My Shared Drive",  # required for uploads
+)
+```
+
+Service accounts have no personal storage quota. Uploads must target a [Shared Drive](https://developers.google.com/workspace/drive/api/guides/about-shareddrives) where the account is at least a **Contributor**. See [Google's storage-limit errors](https://developers.google.com/workspace/drive/api/guides/handle-errors#storage-limit).
+
+### Anonymous (public files)
+
+For files shared publicly ("anyone with the link"), no authentication is needed:
+
+```python
+fs = GoogleDriveFileSystem(token="anon")
+```
+
+See the ``GoogleDriveFileSystem`` docstring for `root_file_id`, `access`, `spaces`, and other options.
 
 ## Installation
-
-You can install it with pip from pypi or directly from source:
 
 ```sh
 pip install gdrive_fsspec
 pip install git+https://github.com/fsspec/gdrive-fsspec
 ```
 
-## Usage
+## Contributing
 
-As gdrivefs implements the fsspec interface, most documentation can be found at https://filesystem-spec.readthedocs.io/en/latest/usage.html.
-
-### Authentication
-
-There are several methods to authenticate gdrivefs against Google Drive.
-
-#### 1. Service account credentials
-
-In this method, you provide a dict containing the service account credentials obtained
-in the GCP console. The dict content is the same as the JSON file downloaded from the GCP console.
-More details can be found here: <https://cloud.google.com/iam/docs/service-account-creds#key-types>.
-This credential can be useful
-when integrating with other GCP services, and when you don't want the user to
-be prompted to authenticate.
-
-```python
-from gdrive_fsspec import GoogleDriveFileSystem
-fs = GoogleDriveFileSystem(creds=service_account_credentials,
-                           token="service_account")
-```
-
-#### 2. OAuth with user credentials
-
-A browser will be opened to complete the OAuth authentication flow. Afterwards, the access
-token will be stored locally, and you can reuse it in subsequent sessions.
-
-```python
-# use this the first time you run
-token = 'browser'
-# use this on subsequent attempts
-# token = 'cache'
-fs = GoogleDriveFileSystem(token=token)
-```
-
-On headless or remote machines (SSH sessions, containers, CI, and similar environments),
-you may not be able to bind a local callback server or open a browser on the same host.
-In that case, pass `use_local_webserver: False` in `auth_kwargs` to request a token via
-the console.
-
-```python
-fs = GoogleDriveFileSystem(
-    token=token,
-    auth_kwargs={'use_local_webserver': False},
-)
-```
-
-#### 3. Anonymous (read-only) access
-
-If you want to interact with files that are shared publicly ("anyone with the link"),
-then you do not need to authenticate to Google Drive.
-
-```python
-token = 'anon'
-fs = GoogleDriveFileSystem(token=token)
-```
-
-See ``GoogleDriveFileSystem`` docstring for more details.
-
-## Development
-
-### Setup
-
-1. Install `uv` and `pre-commit`:
-
-- [uv install docs](https://docs.astral.sh/uv/getting-started/installation/)
-- [pre-commit install docs](https://pre-commit.com/#install)
-
-2. Clone your fork and `cd` into the repo:
-
-```sh
-git clone git@github.com:<your username>/gdrive-fsspec.git
-cd gdrive-fsspec
-```
-
-3. Set up the environment:
-```sh
-uv sync
-pre-commit install
-```
-
-### Running tests
-
-There are unit tests and integration tests. Integration tests use a directory
-named `gdrive_fsspec_testdir` on Google Drive.
-
-**Unit tests** mock the Google Drive API and need no credentials. By default,
-`pytest` runs unit tests only:
-
-```sh
-uv run pytest -v
-```
-
-**Integration tests** hit a real Google Drive account:
-
-```sh
-uv run pytest -v -m integration
-```
-
-Set these environment variables before running them:
-
-- `GDRIVE_FSSPEC_CREDENTIALS_PATH` — path to a service-account JSON, or the JSON string (starting with `{`). Required when using `service_account` (the default).
-- `GDRIVE_FSSPEC_CREDENTIALS_TYPE` — token type (`service_account` default; use `cache` or `browser` for user OAuth).
-- `GDRIVE_FSSPEC_DRIVE` — **Shared Drive name**. Required for service-account upload tests.
-
-Service accounts cannot own files in Google Drive and have no storage quota.
-Uploads must target a [Shared Drive](https://developers.google.com/workspace/drive/api/guides/about-shareddrives) where the service account is a member with at least **Contributor** access.
-See [Google’s storage-limit errors](https://developers.google.com/workspace/drive/api/guides/handle-errors#storage-limit).
-
-For a personal Drive (no Shared Drive), use user OAuth instead:
-`GDRIVE_FSSPEC_CREDENTIALS_TYPE=cache` after a one-time `browser` login.
-
-To run all tests, override the default marker filter:
-
-```sh
-uv run pytest -v -m ""
-```
-
-> **Note:** Integration tests do not run on PRs from forks, because those
-> workflows cannot use repository secrets. They run on pushes to `master` and same repo PRs.
-> Google Drive has no good emulator; see [link](https://github.com/fsspec/gdrive-fsspec/issues/23#issuecomment-2030367587).
+Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests, and CI.
 
 ## Other implementations
 
-- [PyDrive2](https://github.com/iterative/PyDrive2?tab=readme-ov-file#fsspec-filesystem) also provides an fsspec-compatible Google Drive API.
+- [PyDrive2](https://github.com/iterative/PyDrive2?tab=readme-ov-file#fsspec-filesystem) — another fsspec-compatible Google Drive implementation

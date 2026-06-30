@@ -25,8 +25,25 @@ jobs:
 
       - uses: ./.github/actions/setup
 
+      # pyrefly-check uses language: system and expects pyrefly on PATH.
       - name: Run pre-commit
-        run: uvx pre-commit run --all-files
+        run: PATH="$PWD/.venv/bin:$PATH" uvx pre-commit run --all-files
+
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup
+        with:
+          python-version: "3.13"
+
+      - name: Run pyrefly
+        run: uv run pyrefly check --output-format=github
 
   test:
     name: Test (Python ${{ matrix.python-version }})
@@ -48,6 +65,26 @@ jobs:
 
       - name: Run unit tests
         run: uv run pytest -v
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup
+        with:
+          python-version: "3.13"
+
+      - name: Run tests with coverage
+        run: |
+          uv run pytest \
+            --cov=gdrive_fsspec \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-fail-under=95
 
   integration:
     name: Integration tests
