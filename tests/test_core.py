@@ -190,6 +190,39 @@ def test_invalidate_cache_all(anon_fs):
     assert anon_fs.dircache == {}
 
 
+def test_ls_empty_root(anon_fs):
+    anon_fs._list_directory_by_id = mock.Mock(return_value=[])
+
+    assert anon_fs.ls("") == []
+    assert anon_fs.dircache[""] == []
+
+
+def test_ls_empty_custom_root(anon_fs):
+    anon_fs.root_file_id = "empty-root"
+    anon_fs._list_directory_by_id = mock.Mock(return_value=[])
+    anon_fs._file_id_exists = mock.Mock(return_value=True)
+
+    assert anon_fs.ls("") == []
+    assert anon_fs.dircache[""] == []
+
+
+def test_ls_missing_custom_root(anon_fs):
+    anon_fs.root_file_id = "missing-root"
+    anon_fs._list_directory_by_id = mock.Mock(return_value=[])
+    anon_fs._file_id_exists = mock.Mock(return_value=False)
+
+    with pytest.raises(FileNotFoundError):
+        anon_fs.ls("")
+    assert "" not in anon_fs.dircache
+
+
+def test_ls_missing_path_on_empty_root(anon_fs):
+    anon_fs._list_directory_by_id = mock.Mock(return_value=[])
+
+    with pytest.raises(FileNotFoundError):
+        anon_fs.ls("missing")
+
+
 def test_drive_id_from_name_single_match(anon_fs):
     anon_fs.drives = [{"id": "1", "name": "foo"}, {"id": "2", "name": "bar"}]
     assert anon_fs._drive_id_from_name("foo") == "1"
